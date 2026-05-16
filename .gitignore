@@ -9,4 +9,5 @@ coverage.json
 foundry-cache/
 foundry-out/
 broadcast/
+lib/
 *.log
