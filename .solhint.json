@@ -1,0 +1,9 @@
+{
+  "extends": "solhint:recommended",
+  "rules": {
+    "no-global-import": "off",
+    "func-visibility": ["warn", { "ignoreConstructors": true }],
+    "gas-custom-errors": "off",
+    "gas-strict-inequalities": "off"
+  }
+}

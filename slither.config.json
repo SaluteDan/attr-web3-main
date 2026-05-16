@@ -1,0 +1,6 @@
+{
+  "compile_force_framework": "hardhat",
+  "hardhat_artifacts_directory": "artifacts",
+  "filter_paths": "node_modules|test|scripts",
+  "detectors_to_exclude": "naming-convention"
+}

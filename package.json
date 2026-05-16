@@ -1,0 +1,40 @@
+{
+  "name": "attr-web3",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ATTR smart contracts, deployment scripts, and contract verification workers.",
+  "bin": {
+    "attr-web3-verify-contract": "bin/verify-contract.cjs"
+  },
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:contracts": "hardhat test test/contracts/**/*.test.ts",
+    "test:fuzz": "forge test",
+    "coverage": "hardhat coverage",
+    "lint:sol": "solhint \"contracts/**/*.sol\"",
+    "verify:contract": "node bin/verify-contract.cjs",
+    "check:balance": "hardhat run scripts/check/balance.ts",
+    "deploy:token": "hardhat run scripts/deploy/token.ts",
+    "deploy:factory": "hardhat run scripts/deploy/factory.ts",
+    "deploy:governance": "hardhat run scripts/deploy/deploy-governance.ts",
+    "deploy:membership": "hardhat run scripts/deploy/membershipToken.ts",
+    "diagnose:factory": "tsx scripts/diagnose-factory.ts"
+  },
+  "dependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.4.0",
+    "dotenv": "^16.3.1",
+    "hardhat": "^2.27.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.1.6",
+    "viem": "^2.40.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.4.5",
+    "solhint": "^6.2.1",
+    "solidity-coverage": "^0.8.17",
+    "tsx": "^4.21.0"
+  },
+  "license": "ISC"
+}
