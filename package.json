@@ -1,11 +1,22 @@
 {
   "name": "attr-web3",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "description": "ATTR smart contracts, deployment scripts, and contract verification workers.",
+  "main": "bin/verify-contract.cjs",
   "bin": {
     "attr-web3-verify-contract": "bin/verify-contract.cjs"
   },
+  "files": [
+    "bin/",
+    "contracts/",
+    "scripts/",
+    "hardhat.config.ts",
+    "foundry.toml",
+    "slither.config.json",
+    "tsconfig.json",
+    "README.md"
+  ],
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
@@ -13,6 +24,7 @@
     "test:fuzz": "forge test",
     "coverage": "hardhat coverage",
     "lint:sol": "solhint \"contracts/**/*.sol\"",
+    "pack:dry-run": "npm pack --dry-run",
     "verify:contract": "node bin/verify-contract.cjs",
     "check:balance": "hardhat run scripts/check/balance.ts",
     "deploy:token": "hardhat run scripts/deploy/token.ts",
@@ -20,6 +32,16 @@
     "deploy:governance": "hardhat run scripts/deploy/deploy-governance.ts",
     "deploy:membership": "hardhat run scripts/deploy/membershipToken.ts",
     "diagnose:factory": "tsx scripts/diagnose-factory.ts"
+  },
+  "keywords": [
+    "attr",
+    "hardhat",
+    "solidity",
+    "base",
+    "verification"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

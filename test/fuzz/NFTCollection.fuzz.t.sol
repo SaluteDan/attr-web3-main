@@ -14,6 +14,7 @@ contract NFTCollectionFuzzTest is Test {
     ATTRToken public paymentToken;
     
     // Test addresses
+    uint256 internal ownerPrivateKey;
     address public owner;
     address public paymentReceiver;
     address public minter;
@@ -37,7 +38,8 @@ contract NFTCollectionFuzzTest is Test {
     uint256 public totalMinted;
     
     function setUp() public {
-        owner = makeAddr("owner");
+        ownerPrivateKey = 0xA11CE;
+        owner = vm.addr(ownerPrivateKey);
         paymentReceiver = makeAddr("paymentReceiver");
         minter = makeAddr("minter");
         alice = makeAddr("alice");
@@ -101,7 +103,7 @@ contract NFTCollectionFuzzTest is Test {
         
         bytes32 hash = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(vm.envUint("PRIVATE_KEY"), hash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPrivateKey, hash);
         
         return NFTCollection.NFTVoucher({
             recipient: recipient,
@@ -160,13 +162,23 @@ contract NFTCollectionFuzzTest is Test {
      */
     function testFuzz_PerWalletLimitEnforced(uint8 numMints, address minterAddr) public {
         vm.assume(minterAddr != address(0));
+        vm.assume(minterAddr.code.length == 0);
         numMints = uint8(bound(numMints, 0, MAX_PER_WALLET + 5));
         
-        // Owner mints to same address multiple times
         uint256 actualMints = 0;
         for (uint i = 0; i < numMints; i++) {
-            vm.prank(owner);
-            try nft.mintTo(minterAddr, "ipfs://test") {
+            string memory nonce = string(abi.encodePacked("wallet-limit-", vm.toString(i)));
+            NFTCollection.NFTVoucher memory voucher = createVoucher(
+                minterAddr,
+                "ipfs://test",
+                nonce,
+                address(0),
+                0,
+                block.timestamp + 1 days
+            );
+
+            vm.prank(minterAddr);
+            try nft.redeemWithApproval(voucher) {
                 actualMints++;
             } catch {
                 break;
@@ -199,6 +211,7 @@ contract NFTCollectionFuzzTest is Test {
      */
     function testFuzz_MintedTokenOwnerCorrect(address recipient) public {
         vm.assume(recipient != address(0));
+        vm.assume(recipient.code.length == 0);
         
         vm.prank(owner);
         nft.mintTo(recipient, "ipfs://test");
@@ -276,8 +289,6 @@ contract NFTCollectionFuzzTest is Test {
      */
     function testFuzz_ETHPaymentForwarded(uint256 price) public {
         price = bound(price, 1 wei, 100 ether);
-        
-        uint256 receiverBalanceBefore = paymentReceiver.balance;
         
         // Owner mints with ETH (simulating paid mint via voucher)
         // Note: actual paid mint requires voucher, this tests balance tracking
@@ -386,6 +397,7 @@ contract NFTCollectionFuzzTest is Test {
      */
     function handler_mintTo(address to, string memory uri) public {
         vm.assume(to != address(0));
+        vm.assume(to.code.length == 0);
         vm.assume(bytes(uri).length > 0);
         
         if (nft.totalSupply() >= MAX_SUPPLY) return;

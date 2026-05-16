@@ -3,6 +3,7 @@
 node_modules/
 artifacts/
 cache/
+.vscode/
 typechain-types/
 coverage/
 coverage.json
