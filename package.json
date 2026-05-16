@@ -10,6 +10,7 @@
   "files": [
     "bin/",
     "contracts/",
+    "docs/",
     "scripts/",
     "hardhat.config.ts",
     "foundry.toml",
