@@ -49,7 +49,7 @@ describe("ATTRToken", function () {
       const TokenContract = await ethers.getContractFactory("ATTRToken");
       await expect(
         TokenContract.deploy(CAP, INITIAL_SUPPLY, ethers.ZeroAddress),
-      ).to.be.revertedWith("Treasury cannot be zero address");
+      ).to.be.revertedWithCustomError(token, "ZeroAddress");
     });
 
     it("Should revert if cap is zero", async function () {
@@ -63,12 +63,16 @@ describe("ATTRToken", function () {
       const TokenContract = await ethers.getContractFactory("ATTRToken");
       await expect(
         TokenContract.deploy(CAP, CAP + 1n, treasury.address),
-      ).to.be.revertedWith("Initial supply exceeds cap");
+      ).to.be.revertedWithCustomError(token, "MaxSupplyExceeded");
     });
 
     it("Should allow zero initial supply", async function () {
       const TokenContract = await ethers.getContractFactory("ATTRToken");
-      const zeroSupplyToken = await TokenContract.deploy(CAP, 0, treasury.address);
+      const zeroSupplyToken = await TokenContract.deploy(
+        CAP,
+        0,
+        treasury.address,
+      );
       await zeroSupplyToken.waitForDeployment();
 
       expect(await zeroSupplyToken.totalSupply()).to.equal(0n);
@@ -253,16 +257,22 @@ describe("ATTRToken", function () {
 
   describe("Pause / Unpause", function () {
     it("Should allow admin to pause and unpause minting", async function () {
-      await expect(token.pause()).to.emit(token, "Paused").withArgs(owner.address);
+      await expect(token.pause())
+        .to.emit(token, "Paused")
+        .withArgs(owner.address);
 
       await expect(
         token.mint(user1.address, ethers.parseEther("1")),
       ).to.be.revertedWithCustomError(token, "EnforcedPause");
 
-      await expect(token.unpause()).to.emit(token, "Unpaused").withArgs(owner.address);
+      await expect(token.unpause())
+        .to.emit(token, "Unpaused")
+        .withArgs(owner.address);
       await token.mint(user1.address, ethers.parseEther("1"));
 
-      expect(await token.balanceOf(user1.address)).to.equal(ethers.parseEther("1"));
+      expect(await token.balanceOf(user1.address)).to.equal(
+        ethers.parseEther("1"),
+      );
     });
 
     it("Should not allow non-admin to pause or unpause", async function () {
@@ -273,7 +283,9 @@ describe("ATTRToken", function () {
 
       await token.pause();
 
-      await expect(token.connect(user1).unpause()).to.be.revertedWithCustomError(
+      await expect(
+        token.connect(user1).unpause(),
+      ).to.be.revertedWithCustomError(
         token,
         "AccessControlUnauthorizedAccount",
       );

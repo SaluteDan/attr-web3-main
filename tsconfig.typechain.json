@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": ".",
+    "rootDir": ".",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "noEmitOnError": false
+  },
+  "include": ["typechain-types/**/*.ts"],
+  "exclude": ["node_modules", "artifacts", "cache", "dist"]
+}

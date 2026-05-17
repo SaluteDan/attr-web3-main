@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/Context.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "./Errors.sol";
 
 /**
  * @title PaymentSplitter
@@ -45,8 +46,8 @@ contract PaymentSplitter is Context, Ownable {
      * duplicates in `payees`.
      */
     constructor(address[] memory payees, uint256[] memory shares_) payable Ownable(msg.sender) {
-        require(payees.length == shares_.length, "PaymentSplitter: payees and shares length mismatch");
-        require(payees.length > 0, "PaymentSplitter: no payees");
+        if (payees.length != shares_.length) revert ArrayLengthMismatch();
+        if (payees.length == 0) revert NoPayees();
 
         for (uint256 i = 0; i < payees.length; i++) {
             _addPayee(payees[i], shares_[i]);
@@ -132,11 +133,12 @@ contract PaymentSplitter is Context, Ownable {
      * total shares and their previous withdrawals.
      */
     function release(address payable account) public virtual {
-        require(_shares[account] > 0, "PaymentSplitter: account has no shares");
+        if (_shares[account] == 0) revert InvalidPayee();
 
         uint256 payment = releasable(account);
 
-        require(payment != 0, "PaymentSplitter: account is not due payment");
+        // slither-disable-next-line incorrect-equality
+        if (payment == 0) revert NoPaymentDue();
 
         _released[account] += payment;
         _totalReleased += payment;
@@ -150,11 +152,12 @@ contract PaymentSplitter is Context, Ownable {
      * total shares and their previous withdrawals.
      */
     function release(IERC20 token, address account) public virtual {
-        require(_shares[account] > 0, "PaymentSplitter: account has no shares");
+        if (_shares[account] == 0) revert InvalidPayee();
 
         uint256 payment = releasable(token, account);
 
-        require(payment != 0, "PaymentSplitter: account is not due payment");
+        // slither-disable-next-line incorrect-equality
+        if (payment == 0) revert NoPaymentDue();
 
         _erc20Released[token][account] += payment;
         _erc20TotalReleased[token] += payment;
@@ -169,9 +172,9 @@ contract PaymentSplitter is Context, Ownable {
      * @param shares_ The number of shares owned by the payee.
      */
     function _addPayee(address account, uint256 shares_) private {
-        require(account != address(0), "PaymentSplitter: account is the zero address");
-        require(shares_ > 0, "PaymentSplitter: shares are 0");
-        require(_shares[account] == 0, "PaymentSplitter: account already has shares");
+        if (account == address(0)) revert ZeroAddress();
+        if (shares_ == 0) revert InvalidShare();
+        if (_shares[account] != 0) revert DuplicatePayee();
 
         _payees.push(account);
         _shares[account] = shares_;
@@ -354,8 +357,8 @@ contract PaymentSplitter is Context, Ownable {
      * @param newShares The new number of shares
      */
     function updatePayeeShares(address account, uint256 newShares) external onlyOwner {
-        require(_shares[account] > 0, "PaymentSplitter: account has no shares");
-        require(newShares > 0, "PaymentSplitter: shares are 0");
+        if (_shares[account] == 0) revert InvalidPayee();
+        if (newShares == 0) revert InvalidShare();
         
         _totalShares = _totalShares - _shares[account] + newShares;
         _shares[account] = newShares;

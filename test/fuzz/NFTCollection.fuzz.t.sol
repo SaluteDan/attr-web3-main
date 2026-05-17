@@ -29,7 +29,7 @@ contract NFTCollectionFuzzTest is Test {
     
     // EIP-712 TypeHash
     bytes32 constant VOUCHER_TYPEHASH = keccak256(
-        "NFTVoucher(address recipient,string uri,string nonce,address currency,uint256 minPrice,uint256 deadline)"
+        "NFTVoucher(address recipient,string uri,string nonce,address currency,uint256 basePrice,uint256 creatorTip,uint256 deadline)"
     );
     
     // Invariant tracking
@@ -57,7 +57,9 @@ contract NFTCollectionFuzzTest is Test {
             CONTRACT_URI,
             MAX_SUPPLY,
             paymentReceiver,
-            MAX_PER_WALLET
+            MAX_PER_WALLET,
+            paymentReceiver, // tipReceiver_
+            address(0)       // attrSpender_ (disabled)
         );
         
         // Deploy payment token
@@ -80,7 +82,8 @@ contract NFTCollectionFuzzTest is Test {
         string memory uri,
         string memory nonce,
         address currency,
-        uint256 minPrice,
+        uint256 basePrice,
+        uint256 creatorTip,
         uint256 deadline
     ) internal view returns (NFTCollection.NFTVoucher memory) {
         bytes32 domainSeparator = keccak256(abi.encode(
@@ -97,7 +100,8 @@ contract NFTCollectionFuzzTest is Test {
             keccak256(bytes(uri)),
             keccak256(bytes(nonce)),
             currency,
-            minPrice,
+            basePrice,
+            creatorTip,
             deadline
         ));
         
@@ -110,7 +114,8 @@ contract NFTCollectionFuzzTest is Test {
             uri: uri,
             nonce: nonce,
             currency: currency,
-            minPrice: minPrice,
+            basePrice: basePrice,
+            creatorTip: creatorTip,
             deadline: deadline,
             signature: abi.encodePacked(r, s, v)
         });
@@ -173,7 +178,8 @@ contract NFTCollectionFuzzTest is Test {
                 "ipfs://test",
                 nonce,
                 address(0),
-                0,
+                0, // basePrice
+                0, // creatorTip
                 block.timestamp + 1 days
             );
 

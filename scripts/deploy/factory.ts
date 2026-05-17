@@ -14,9 +14,14 @@ async function main() {
   const balance = await ethers.provider.getBalance(deployer.address);
   console.log("Account balance:", ethers.formatEther(balance), "ETH");
 
+  // ATTRSpender must be deployed first; pass its address here (or address(0) to skip ATTR routing)
+  const attrSpenderAddress =
+    process.env.ATTR_SPENDER_ADDRESS ?? ethers.ZeroAddress;
+  console.log("ATTRSpender:", attrSpenderAddress);
+
   // Deploy Factory
   const Factory = await ethers.getContractFactory("ATTRDeployer");
-  const factory = await Factory.deploy(deployer.address);
+  const factory = await Factory.deploy(deployer.address, attrSpenderAddress);
   await factory.waitForDeployment();
 
   const factoryAddress = await factory.getAddress();

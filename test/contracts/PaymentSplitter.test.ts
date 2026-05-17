@@ -37,50 +37,51 @@ describe("PaymentSplitter", function () {
     });
 
     it("Should revert if arrays have different lengths", async function () {
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
       await expect(
         SplitterContract.deploy([payee1.address], [50, 50]),
-      ).to.be.revertedWith(
-        "PaymentSplitter: payees and shares length mismatch",
-      );
+      ).to.be.revertedWithCustomError(splitter, "ArrayLengthMismatch");
     });
 
     it("Should revert if no payees provided", async function () {
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
-      await expect(SplitterContract.deploy([], [])).to.be.revertedWith(
-        "PaymentSplitter: no payees",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
+      await expect(
+        SplitterContract.deploy([], []),
+      ).to.be.revertedWithCustomError(splitter, "NoPayees");
     });
 
     it("Should revert if payee is zero address", async function () {
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
       await expect(
         SplitterContract.deploy([ethers.ZeroAddress], [100]),
-      ).to.be.revertedWith("PaymentSplitter: account is the zero address");
+      ).to.be.revertedWithCustomError(splitter, "ZeroAddress");
     });
 
     it("Should revert if shares are zero", async function () {
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
       await expect(
         SplitterContract.deploy([payee1.address], [0]),
-      ).to.be.revertedWith("PaymentSplitter: shares are 0");
+      ).to.be.revertedWithCustomError(splitter, "InvalidShare");
+    });
+
+    it("Should revert if any payee has zero shares", async function () {
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
+      await expect(
+        SplitterContract.deploy([payee1.address, payee2.address], [50, 0]),
+      ).to.be.revertedWithCustomError(splitter, "InvalidShare");
     });
 
     it("Should revert if duplicate payees", async function () {
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
       await expect(
         SplitterContract.deploy([payee1.address, payee1.address], [50, 50]),
-      ).to.be.revertedWith("PaymentSplitter: account already has shares");
+      ).to.be.revertedWithCustomError(splitter, "DuplicatePayee");
     });
   });
 
@@ -177,17 +178,17 @@ describe("PaymentSplitter", function () {
     });
 
     it("Should revert if account has no shares", async function () {
-      await expect(splitter.release(payee3.address)).to.be.revertedWith(
-        "PaymentSplitter: account has no shares",
-      );
+      await expect(
+        splitter.release(payee3.address),
+      ).to.be.revertedWithCustomError(splitter, "InvalidPayee");
     });
 
     it("Should revert if account is not due payment", async function () {
       await splitter.release(payee1.address);
 
-      await expect(splitter.release(payee1.address)).to.be.revertedWith(
-        "PaymentSplitter: account is not due payment",
-      );
+      await expect(
+        splitter.release(payee1.address),
+      ).to.be.revertedWithCustomError(splitter, "NoPaymentDue");
     });
   });
 
@@ -279,9 +280,8 @@ describe("PaymentSplitter", function () {
 
   describe("Complex Split Scenarios", function () {
     it("Should handle uneven splits correctly", async function () {
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
       const unevenSplitter = await SplitterContract.deploy(
         [payee1.address, payee2.address, payee3.address],
         [50, 30, 20],
@@ -456,13 +456,13 @@ describe("PaymentSplitter", function () {
     it("Should revert when updating non-existent payee", async function () {
       await expect(
         splitter.updatePayeeShares(payee3.address, 50),
-      ).to.be.revertedWith("PaymentSplitter: account has no shares");
+      ).to.be.revertedWithCustomError(splitter, "InvalidPayee");
     });
 
     it("Should revert when updating to zero shares", async function () {
       await expect(
         splitter.updatePayeeShares(payee1.address, 0),
-      ).to.be.revertedWith("PaymentSplitter: shares are 0");
+      ).to.be.revertedWithCustomError(splitter, "InvalidShare");
     });
   });
 

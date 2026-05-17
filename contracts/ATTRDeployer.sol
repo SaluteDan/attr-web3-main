@@ -4,6 +4,8 @@ pragma solidity ^0.8.26;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./NFTCollection.sol";
 import "./PaymentSplitter.sol";
+import "./ATTRSpender.sol";
+import "./Errors.sol";
 
 /**
  * @title ATTRDeployer
@@ -20,7 +22,25 @@ contract ATTRDeployer is Ownable {
     // Array to track all deployed PaymentSplitters
     address[] private deployedSplitters;
 
+    // Shared ATTR payment proxy — auto-authorises each new collection on deploy
+    ATTRSpender public attrSpender;
+
     // Events
+
+    /// @dev Emitted when a new NFT collection is deployed by the factory.
+    event CollectionDeployed(
+        address indexed collection,
+        address indexed creator,
+        string name,
+        string symbol,
+        address royaltyReceiver,
+        address primaryReceiver,
+        address tipReceiver,
+        address royaltySplitter,
+        address mintSplitter
+    );
+
+    /// @dev Legacy alias kept for off-chain indexers that rely on the old event.
     event CollectionCreated(
         address indexed collectionAddress,
         string name,
@@ -31,10 +51,13 @@ contract ATTRDeployer is Ownable {
     );
 
     /**
-     * @dev Constructor sets the initial owner
-     * @param initialOwner The address that will own this factory (backend wallet)
+     * @dev Constructor sets the initial owner and the shared ATTRSpender.
+     * @param initialOwner  Backend wallet that owns the factory.
+     * @param attrSpender_  Address of the deployed ATTRSpender (address(0) to skip ATTR routing).
      */
-    constructor(address initialOwner) Ownable(initialOwner) {}
+    constructor(address initialOwner, address attrSpender_) Ownable(initialOwner) {
+        attrSpender = ATTRSpender(attrSpender_);
+    }
 
     /**
      * @dev Deploy a new NFT collection with unified payment distribution (same for mint and royalty)
@@ -64,6 +87,7 @@ contract ATTRDeployer is Ownable {
         onlyOwner
         returns (address)
     {
+        if (creators.length == 0) revert ArrayLengthMismatch();
         return createCollectionWithSeparateReceivers(
             name,
             symbol,
@@ -74,7 +98,8 @@ contract ATTRDeployer is Ownable {
             shares,   // Same shares for mint payments
             contractURI,
             maxSupply,
-            maxMintPerWallet
+            maxMintPerWallet,
+            creators[0] // tipReceiver defaults to first creator
         );
     }
 
@@ -102,33 +127,32 @@ contract ATTRDeployer is Ownable {
         uint256[] memory mintShares,
         string memory contractURI,
         uint256 maxSupply,
-        uint256 maxMintPerWallet
+        uint256 maxMintPerWallet,
+        address tipReceiver_
     )
         public
         onlyOwner
         returns (address)
     {
-        require(bytes(name).length > 0, "Name cannot be empty");
-        require(bytes(symbol).length > 0, "Symbol cannot be empty");
-        require(royaltyFeeNumerator <= 10000, "Royalty fee too high");
-        require(royaltyCreators.length > 0, "Must have at least one royalty creator");
-        require(royaltyCreators.length == royaltyShares.length, "Royalty creators and shares length mismatch");
-        require(mintCreators.length > 0, "Must have at least one mint creator");
-        require(mintCreators.length == mintShares.length, "Mint creators and shares length mismatch");
-        require(maxSupply > 0, "Max supply must be greater than 0");
-        require(maxMintPerWallet > 0, "Max mint per wallet must be greater than 0");
-        require(maxMintPerWallet <= maxSupply, "Max mint per wallet exceeds max supply");
+        if (tipReceiver_ == address(0)) revert ZeroAddress();
+        if (bytes(name).length == 0) revert EmptyName();
+        if (bytes(symbol).length == 0) revert EmptySymbol();
+        if (royaltyFeeNumerator > 10000) revert RoyaltyFeeTooHigh();
+        if (royaltyCreators.length == 0 || royaltyCreators.length != royaltyShares.length) revert ArrayLengthMismatch();
+        if (mintCreators.length == 0 || mintCreators.length != mintShares.length) revert ArrayLengthMismatch();
+        if (maxSupply == 0) revert InvalidMaxSupply();
+        if (maxMintPerWallet == 0 || maxMintPerWallet > maxSupply) revert InvalidMaxMintPerWallet();
 
         // Validate royalty creators and shares
         for (uint256 i = 0; i < royaltyCreators.length; i++) {
-            require(royaltyCreators[i] != address(0), "Royalty creator address cannot be zero");
-            require(royaltyShares[i] > 0, "Royalty creator share must be greater than 0");
+            if (royaltyCreators[i] == address(0)) revert ZeroAddress();
+            if (royaltyShares[i] == 0) revert InvalidShare();
         }
 
         // Validate mint creators and shares
         for (uint256 i = 0; i < mintCreators.length; i++) {
-            require(mintCreators[i] != address(0), "Mint creator address cannot be zero");
-            require(mintShares[i] > 0, "Mint creator share must be greater than 0");
+            if (mintCreators[i] == address(0)) revert ZeroAddress();
+            if (mintShares[i] == 0) revert InvalidShare();
         }
 
         // Setup royalty receiver
@@ -162,10 +186,15 @@ contract ATTRDeployer is Ownable {
         } else {
             // Multiple mint creators with a different distribution - deploy a dedicated splitter
             PaymentSplitter mintSplitter = new PaymentSplitter(mintCreators, mintShares);
-            address mintSplitterAddress = address(mintSplitter);
-            mintPaymentReceiver = mintSplitterAddress;
-            deployedSplitters.push(mintSplitterAddress);
+            mintPaymentReceiver = address(mintSplitter);
+            deployedSplitters.push(mintPaymentReceiver);
         }
+
+        // Determine mint splitter address for event (only when a dedicated one was deployed)
+        address mintSplitterAddress = (mintCreators.length > 1 &&
+            !_arraysEqual(royaltyCreators, mintCreators, royaltyShares, mintShares))
+            ? mintPaymentReceiver
+            : address(0);
 
         // Deploy new collection
         NFTCollection newCollection = new NFTCollection(
@@ -177,21 +206,36 @@ contract ATTRDeployer is Ownable {
             contractURI,
             maxSupply,
             mintPaymentReceiver,
-            maxMintPerWallet
+            maxMintPerWallet,
+            tipReceiver_,
+            address(attrSpender)
         );
         address collectionAddress = address(newCollection);
 
         // Track the deployed collection
         deployedCollections.push(collectionAddress);
-        
+
         // Store the mapping from collection to royalty splitter (if any)
-        // Note: We store the royalty splitter for backwards compatibility
         if (royaltySplitterAddress != address(0)) {
             collectionToSplitter[collectionAddress] = royaltySplitterAddress;
         }
 
-        // Emit event with royalty splitter for backwards compatibility
-        // TODO: Consider adding a new event that includes both splitter addresses
+        // Auto-authorise the new collection in ATTRSpender
+        if (address(attrSpender) != address(0)) {
+            attrSpender.setCollectionAuthorized(collectionAddress, true);
+        }
+
+        emit CollectionDeployed(
+            collectionAddress,
+            msg.sender,
+            name,
+            symbol,
+            royaltyReceiver,
+            mintPaymentReceiver,
+            tipReceiver_,
+            royaltySplitterAddress,
+            mintSplitterAddress
+        );
         emit CollectionCreated(collectionAddress, name, symbol, msg.sender, royaltyReceiver, royaltySplitterAddress);
 
         return collectionAddress;
@@ -219,7 +263,7 @@ contract ATTRDeployer is Ownable {
      * @return The address of the collection at the given index
      */
     function getCollectionAt(uint256 index) external view returns (address) {
-        require(index < deployedCollections.length, "Index out of bounds");
+        if (index >= deployedCollections.length) revert IndexOutOfBounds();
         return deployedCollections[index];
     }
 
@@ -254,7 +298,7 @@ contract ATTRDeployer is Ownable {
      * @return The address of the PaymentSplitter at the given index
      */
     function getSplitterAt(uint256 index) external view returns (address) {
-        require(index < deployedSplitters.length, "Index out of bounds");
+        if (index >= deployedSplitters.length) revert IndexOutOfBounds();
         return deployedSplitters[index];
     }
 

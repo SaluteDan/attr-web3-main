@@ -1,14 +1,30 @@
 {
   "name": "attr-web3",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": false,
   "description": "ATTR smart contracts, deployment scripts, and contract verification workers.",
-  "main": "bin/verify-contract.cjs",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./typechain-types/*": {
+      "types": "./typechain-types/*.d.ts",
+      "default": "./typechain-types/*.js"
+    },
+    "./verify": {
+      "default": "./bin/verify-contract.cjs"
+    }
+  },
   "bin": {
     "attr-web3-verify-contract": "bin/verify-contract.cjs"
   },
   "files": [
     "bin/",
+    "dist/",
+    "typechain-types/",
     "contracts/",
     "docs/",
     "scripts/",
@@ -16,9 +32,15 @@
     "foundry.toml",
     "slither.config.json",
     "tsconfig.json",
+    "tsconfig.build.json",
+    "tsconfig.typechain.json",
     "README.md"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json && npm run build:typechain && npm run build:symlink",
+    "build:symlink": "node scripts/util/build-symlink.js",
+    "build:typechain": "tsc -p tsconfig.typechain.json",
+    "prepublishOnly": "npm run compile && npm run build",
     "compile": "hardhat compile",
     "test": "hardhat test",
     "test:contracts": "hardhat test test/contracts/**/*.test.ts",
@@ -30,7 +52,6 @@
     "check:balance": "hardhat run scripts/check/balance.ts",
     "deploy:token": "hardhat run scripts/deploy/token.ts",
     "deploy:factory": "hardhat run scripts/deploy/factory.ts",
-    "deploy:governance": "hardhat run scripts/deploy/deploy-governance.ts",
     "deploy:membership": "hardhat run scripts/deploy/membershipToken.ts",
     "diagnose:factory": "tsx scripts/diagnose-factory.ts"
   },

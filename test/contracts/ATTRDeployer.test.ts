@@ -17,46 +17,58 @@ describe("ATTRDeployer", function () {
   beforeEach(async function () {
     [owner, addr1, addr2, treasury] = await ethers.getSigners();
 
-    // Deploy Factory
     const FactoryContract = await ethers.getContractFactory("ATTRDeployer");
-    const deployedFactory = await FactoryContract.deploy(owner.address);
+    const deployedFactory = await FactoryContract.deploy(
+      owner.address,
+      ethers.ZeroAddress,
+    );
     await deployedFactory.waitForDeployment();
     factory = deployedFactory as unknown as ATTRDeployer;
   });
+
+  // ── Deployment ─────────────────────────────────────────────────────────────
 
   describe("Deployment", function () {
     it("Should set the right owner", async function () {
       expect(await factory.owner()).to.equal(owner.address);
     });
+
+    it("Should store attrSpender address", async function () {
+      expect(await factory.attrSpender()).to.equal(ethers.ZeroAddress);
+    });
   });
 
+  // ── Collection Creation ────────────────────────────────────────────────────
+
   describe("Collection Creation", function () {
-    it("Should deploy a new NFT collection", async function () {
-      const name = "Test Collection";
-      const symbol = "TEST";
+    it("Should deploy a new NFT collection and emit CollectionDeployed", async function () {
+      await expect(
+        factory.createCollection(
+          "Test Collection",
+          "TEST",
+          500,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          10000,
+          10,
+        ),
+      ).to.emit(factory, "CollectionDeployed");
+    });
 
-      const tx = await factory.createCollection(
-        name,
-        symbol,
-        500, // Royalty
-        [owner.address], // Single creator
-        [100], // Share weight
-        "ipfs://test",
-        10000,
-        10,
-      );
-      const receipt = await tx.wait();
-
-      // Check event emission
-      const event = receipt?.logs.find((log: any) => {
-        try {
-          return factory.interface.parseLog(log)?.name === "CollectionCreated";
-        } catch {
-          return false;
-        }
-      });
-
-      expect(event).to.not.be.undefined;
+    it("Should also emit legacy CollectionCreated event", async function () {
+      await expect(
+        factory.createCollection(
+          "Test",
+          "TST",
+          500,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          10000,
+          10,
+        ),
+      ).to.emit(factory, "CollectionCreated");
     });
 
     it("Should track deployed collections", async function () {
@@ -88,8 +100,9 @@ describe("ATTRDeployer", function () {
     });
 
     it("Should revert when collection index is out of bounds", async function () {
-      await expect(factory.getCollectionAt(0)).to.be.revertedWith(
-        "Index out of bounds",
+      await expect(factory.getCollectionAt(0)).to.be.revertedWithCustomError(
+        factory,
+        "IndexOutOfBounds",
       );
     });
 
@@ -112,37 +125,88 @@ describe("ATTRDeployer", function () {
 
     it("Should validate required collection parameters", async function () {
       await expect(
-        factory.createCollection("", "TST", 500, [owner.address], [100], "ipfs://test", 10000, 10),
-      ).to.be.revertedWith("Name cannot be empty");
+        factory.createCollection(
+          "",
+          "TST",
+          500,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          10000,
+          10,
+        ),
+      ).to.be.revertedWithCustomError(factory, "EmptyName");
 
       await expect(
-        factory.createCollection("Test", "", 500, [owner.address], [100], "ipfs://test", 10000, 10),
-      ).to.be.revertedWith("Symbol cannot be empty");
+        factory.createCollection(
+          "Test",
+          "",
+          500,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          10000,
+          10,
+        ),
+      ).to.be.revertedWithCustomError(factory, "EmptySymbol");
 
       await expect(
-        factory.createCollection("Test", "TST", 10001, [owner.address], [100], "ipfs://test", 10000, 10),
-      ).to.be.revertedWith("Royalty fee too high");
+        factory.createCollection(
+          "Test",
+          "TST",
+          10001,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          10000,
+          10,
+        ),
+      ).to.be.revertedWithCustomError(factory, "RoyaltyFeeTooHigh");
 
       await expect(
-        factory.createCollection("Test", "TST", 500, [owner.address], [100], "ipfs://test", 0, 10),
-      ).to.be.revertedWith("Max supply must be greater than 0");
+        factory.createCollection(
+          "Test",
+          "TST",
+          500,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          0,
+          10,
+        ),
+      ).to.be.revertedWithCustomError(factory, "InvalidMaxSupply");
 
       await expect(
-        factory.createCollection("Test", "TST", 500, [owner.address], [100], "ipfs://test", 10000, 0),
-      ).to.be.revertedWith("Max mint per wallet must be greater than 0");
+        factory.createCollection(
+          "Test",
+          "TST",
+          500,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          10000,
+          0,
+        ),
+      ).to.be.revertedWithCustomError(factory, "InvalidMaxMintPerWallet");
 
       await expect(
-        factory.createCollection("Test", "TST", 500, [owner.address], [100], "ipfs://test", 5, 6),
-      ).to.be.revertedWith("Max mint per wallet exceeds max supply");
+        factory.createCollection(
+          "Test",
+          "TST",
+          500,
+          [owner.address],
+          [100],
+          "ipfs://test",
+          5,
+          6,
+        ),
+      ).to.be.revertedWithCustomError(factory, "InvalidMaxMintPerWallet");
     });
 
     it("Should deploy collection with correct name and symbol", async function () {
-      const name = "My NFT";
-      const symbol = "MNFT";
-
-      const tx = await factory.createCollection(
-        name,
-        symbol,
+      await factory.createCollection(
+        "My NFT",
+        "MNFT",
         500,
         [owner.address],
         [100],
@@ -150,72 +214,54 @@ describe("ATTRDeployer", function () {
         10000,
         10,
       );
-      const receipt = await tx.wait();
 
       const collections = await factory.getDeployedCollections();
       const collectionAddress = collections[collections.length - 1];
-
       const NFTContract = await ethers.getContractFactory("NFTCollection");
       const collection = NFTContract.attach(
         collectionAddress,
       ) as unknown as NFTCollection;
 
-      expect(await collection.name()).to.equal(name);
-      expect(await collection.symbol()).to.equal(symbol);
+      expect(await collection.name()).to.equal("My NFT");
+      expect(await collection.symbol()).to.equal("MNFT");
     });
   });
 
+  // ── PaymentSplitter Integration ────────────────────────────────────────────
+
   describe("PaymentSplitter Integration", function () {
     it("Should deploy PaymentSplitter when multiple creators are provided", async function () {
-      const tx = await factory.createCollection(
+      await factory.createCollection(
         "Test Collection",
         "TEST",
-        500, // 5% royalty
-        [addr1.address, treasury.address], // Two creators
-        [500, 2000], // Artist: 500, Platform: 2000
+        500,
+        [addr1.address, treasury.address],
+        [500, 2000],
         "ipfs://test",
         10000,
         10,
       );
-      const receipt = await tx.wait();
-
-      // Check event includes PaymentSplitter address
-      const event = receipt?.logs.find((log: any) => {
-        try {
-          const parsed = factory.interface.parseLog(log);
-          return parsed?.name === "CollectionCreated";
-        } catch {
-          return false;
-        }
-      });
-
-      expect(event).to.not.be.undefined;
 
       const collections = await factory.getDeployedCollections();
       const collectionAddress = collections[collections.length - 1];
-
-      // Check that PaymentSplitter was created and stored
-      const splitterAddress = await factory.getPaymentSplitter(
-        collectionAddress,
-      );
+      const splitterAddress =
+        await factory.getPaymentSplitter(collectionAddress);
       expect(splitterAddress).to.not.equal(ethers.ZeroAddress);
 
-      // Verify PaymentSplitter configuration
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
       const splitter = SplitterContract.attach(
         splitterAddress,
       ) as unknown as PaymentSplitter;
 
-      expect(await splitter.shares(addr1.address)).to.equal(500); // Artist share
-      expect(await splitter.shares(treasury.address)).to.equal(2000); // Platform share
-      expect(await splitter.totalShares()).to.equal(2500); // Total weight
+      expect(await splitter.shares(addr1.address)).to.equal(500);
+      expect(await splitter.shares(treasury.address)).to.equal(2000);
+      expect(await splitter.totalShares()).to.equal(2500);
     });
 
     it("Should not deploy PaymentSplitter when only one creator", async function () {
       await factory.createCollection(
-        "Test Collection",
+        "Test",
         "TEST",
         500,
         [addr1.address],
@@ -227,17 +273,14 @@ describe("ATTRDeployer", function () {
 
       const collections = await factory.getDeployedCollections();
       const collectionAddress = collections[collections.length - 1];
-
-      const splitterAddress = await factory.getPaymentSplitter(
-        collectionAddress,
-      );
+      const splitterAddress =
+        await factory.getPaymentSplitter(collectionAddress);
       expect(splitterAddress).to.equal(ethers.ZeroAddress);
     });
 
     it("Should track all deployed PaymentSplitters", async function () {
-      // Deploy multiple collections with PaymentSplitters
       await factory.createCollection(
-        "Collection 1",
+        "C1",
         "C1",
         500,
         [addr1.address, treasury.address],
@@ -247,7 +290,7 @@ describe("ATTRDeployer", function () {
         10,
       );
       await factory.createCollection(
-        "Collection 2",
+        "C2",
         "C2",
         500,
         [addr1.address, treasury.address],
@@ -257,10 +300,10 @@ describe("ATTRDeployer", function () {
         10,
       );
       await factory.createCollection(
-        "Collection 3",
+        "C3",
         "C3",
         500,
-        [addr1.address], // Single creator, no splitter
+        [addr1.address],
         [100],
         "ipfs://test",
         10000,
@@ -268,17 +311,13 @@ describe("ATTRDeployer", function () {
       );
 
       const splitters = await factory.getDeployedSplitters();
-      // Each multi-creator deployment adds 1 splitter
-      // Collection 1 (2 creators) and Collection 2 (2 creators) each add 1 splitter
-      // Collection 3 (1 creator) adds no splitter
-      // We check that at least 2 splitters exist from this test's collections
       expect(splitters.length).to.be.at.least(2);
       expect(await factory.getSplitterCount()).to.be.at.least(2);
     });
 
     it("Should allow retrieving PaymentSplitter by index", async function () {
       await factory.createCollection(
-        "Test Collection",
+        "Test",
         "TEST",
         500,
         [addr1.address, treasury.address],
@@ -291,35 +330,18 @@ describe("ATTRDeployer", function () {
       const splitterAddress = await factory.getSplitterAt(0);
       expect(splitterAddress).to.not.equal(ethers.ZeroAddress);
 
-      // Verify it's the same as the one linked to the collection
       const collections = await factory.getDeployedCollections();
       const collectionAddress = collections[collections.length - 1];
-      const linkedSplitter = await factory.getPaymentSplitter(
-        collectionAddress,
-      );
-
+      const linkedSplitter =
+        await factory.getPaymentSplitter(collectionAddress);
       expect(splitterAddress).to.equal(linkedSplitter);
     });
 
     it("Should revert when splitter index is out of bounds", async function () {
-      await expect(factory.getSplitterAt(0)).to.be.revertedWith(
-        "Index out of bounds",
+      await expect(factory.getSplitterAt(0)).to.be.revertedWithCustomError(
+        factory,
+        "IndexOutOfBounds",
       );
-    });
-
-    it("Should emit CollectionCreated event with PaymentSplitter address", async function () {
-      await expect(
-        factory.createCollection(
-          "Test Collection",
-          "TEST",
-          500,
-          [addr1.address, treasury.address],
-          [500, 2000],
-          "ipfs://test",
-          10000,
-          10,
-        ),
-      ).to.emit(factory, "CollectionCreated");
     });
 
     it("Should support 3+ creators", async function () {
@@ -336,9 +358,8 @@ describe("ATTRDeployer", function () {
       );
 
       const splitterAddress = await factory.getSplitterAt(0);
-      const SplitterContract = await ethers.getContractFactory(
-        "PaymentSplitter",
-      );
+      const SplitterContract =
+        await ethers.getContractFactory("PaymentSplitter");
       const splitter = SplitterContract.attach(
         splitterAddress,
       ) as unknown as PaymentSplitter;
@@ -361,7 +382,7 @@ describe("ATTRDeployer", function () {
           10000,
           10,
         ),
-      ).to.be.revertedWith("Royalty creators and shares length mismatch");
+      ).to.be.revertedWithCustomError(factory, "ArrayLengthMismatch");
     });
 
     it("Should revert when no creators provided", async function () {
@@ -376,7 +397,7 @@ describe("ATTRDeployer", function () {
           10000,
           10,
         ),
-      ).to.be.revertedWith("Must have at least one royalty creator");
+      ).to.be.revertedWithCustomError(factory, "ArrayLengthMismatch");
     });
 
     it("Should reject zero royalty creator address and zero royalty share", async function () {
@@ -391,7 +412,7 @@ describe("ATTRDeployer", function () {
           10000,
           10,
         ),
-      ).to.be.revertedWith("Royalty creator address cannot be zero");
+      ).to.be.revertedWithCustomError(factory, "ZeroAddress");
 
       await expect(
         factory.createCollection(
@@ -404,34 +425,30 @@ describe("ATTRDeployer", function () {
           10000,
           10,
         ),
-      ).to.be.revertedWith("Royalty creator share must be greater than 0");
+      ).to.be.revertedWithCustomError(factory, "InvalidShare");
     });
 
-    // Tests for createCollectionWithSeparateReceivers
+    // ── Separate Mint/Royalty Receivers ──────────────────────────────────────
+
     describe("Separate Mint/Royalty Receivers", function () {
       it("Should deploy with different mint and royalty creators (separate model)", async function () {
         await factory.createCollectionWithSeparateReceivers(
           "Separate Collection",
           "SEP",
           500,
-          // Royalty creators (for secondary sales)
           [addr1.address, treasury.address],
           [300, 200],
-          // Mint creators (for initial mint payments)
-          [treasury.address], // Gallery keeps 100% of mint
+          [treasury.address],
           [10000],
           "ipfs://test",
           10000,
           10,
+          addr1.address, // tipReceiver
         );
 
         const collections = await factory.getDeployedCollections();
         const collectionAddress = collections[collections.length - 1];
-
-        // Verify collection was deployed
         expect(collectionAddress).to.not.equal(ethers.ZeroAddress);
-
-        // Should have deployed 1 splitter (for royalties) + 0 for mint (single creator, direct payment)
         expect(await factory.getSplitterCount()).to.equal(1);
       });
 
@@ -440,42 +457,56 @@ describe("ATTRDeployer", function () {
           "Gallery First",
           "GFIRST",
           500,
-          // Royalty: Artist + platform
           [addr1.address, treasury.address],
           [300, 200],
-          // Mint: Only platform (gallery keeps all)
           [treasury.address],
           [10000],
           "ipfs://test",
           10000,
           10,
+          addr1.address, // tipReceiver
         );
 
         const collections = await factory.getDeployedCollections();
         expect(collections.length).to.equal(1);
       });
 
-      it("Should support same creators for both (unified model)", async function () {
+      it("Should support same creators for both (unified model — reuses one splitter)", async function () {
         await factory.createCollectionWithSeparateReceivers(
           "Unified Collection",
           "UNI",
           500,
           [addr1.address, treasury.address],
           [300, 200],
-          // Same creators for mint
           [addr1.address, treasury.address],
           [300, 200],
           "ipfs://test",
           10000,
           10,
+          addr1.address, // tipReceiver
         );
 
         const collections = await factory.getDeployedCollections();
         expect(collections.length).to.equal(1);
-
-        // When mint and royalty distributions are identical, the factory reuses
-        // a single splitter for both instead of deploying a duplicate.
         expect(await factory.getSplitterCount()).to.equal(1);
+      });
+
+      it("Should revert on zero tipReceiver", async function () {
+        await expect(
+          factory.createCollectionWithSeparateReceivers(
+            "Bad",
+            "BAD",
+            500,
+            [addr1.address],
+            [100],
+            [addr1.address],
+            [100],
+            "ipfs://test",
+            10000,
+            10,
+            ethers.ZeroAddress, // tipReceiver = zero → ZeroAddress revert
+          ),
+        ).to.be.revertedWithCustomError(factory, "ZeroAddress");
       });
 
       it("Should revert when mint creators and shares arrays mismatch", async function () {
@@ -486,13 +517,14 @@ describe("ATTRDeployer", function () {
             500,
             [addr1.address],
             [100],
-            [treasury.address, addr1.address], // 2 creators
-            [100], // Only 1 share
+            [treasury.address, addr1.address],
+            [100],
             "ipfs://test",
             10000,
             10,
+            addr1.address,
           ),
-        ).to.be.revertedWith("Mint creators and shares length mismatch");
+        ).to.be.revertedWithCustomError(factory, "ArrayLengthMismatch");
       });
 
       it("Should revert when royalty creators and shares arrays mismatch", async function () {
@@ -501,15 +533,16 @@ describe("ATTRDeployer", function () {
             "Bad",
             "BAD",
             500,
-            [addr1.address, treasury.address], // 2 creators
-            [100], // Only 1 share
+            [addr1.address, treasury.address],
+            [100],
             [treasury.address],
             [100],
             "ipfs://test",
             10000,
             10,
+            addr1.address,
           ),
-        ).to.be.revertedWith("Royalty creators and shares length mismatch");
+        ).to.be.revertedWithCustomError(factory, "ArrayLengthMismatch");
       });
 
       it("Should reject empty mint creators, zero mint address, and zero mint share", async function () {
@@ -525,8 +558,9 @@ describe("ATTRDeployer", function () {
             "ipfs://test",
             10000,
             10,
+            addr1.address,
           ),
-        ).to.be.revertedWith("Must have at least one mint creator");
+        ).to.be.revertedWithCustomError(factory, "ArrayLengthMismatch");
 
         await expect(
           factory.createCollectionWithSeparateReceivers(
@@ -540,8 +574,9 @@ describe("ATTRDeployer", function () {
             "ipfs://test",
             10000,
             10,
+            addr1.address,
           ),
-        ).to.be.revertedWith("Mint creator address cannot be zero");
+        ).to.be.revertedWithCustomError(factory, "ZeroAddress");
 
         await expect(
           factory.createCollectionWithSeparateReceivers(
@@ -555,25 +590,27 @@ describe("ATTRDeployer", function () {
             "ipfs://test",
             10000,
             10,
+            addr1.address,
           ),
-        ).to.be.revertedWith("Mint creator share must be greater than 0");
+        ).to.be.revertedWithCustomError(factory, "InvalidShare");
       });
 
-      it("Should emit CollectionCreated event with royalty splitter (separate receivers)", async function () {
-        await expect(
-          factory.createCollectionWithSeparateReceivers(
-            "Test Separate",
-            "TESTSEP",
-            500,
-            [addr1.address, treasury.address],
-            [300, 200],
-            [treasury.address],
-            [10000],
-            "ipfs://test",
-            10000,
-            10,
-          ),
-        ).to.emit(factory, "CollectionCreated");
+      it("Should emit both CollectionDeployed and CollectionCreated events", async function () {
+        const tx = factory.createCollectionWithSeparateReceivers(
+          "Test Sep",
+          "TESTSEP",
+          500,
+          [addr1.address, treasury.address],
+          [300, 200],
+          [treasury.address],
+          [10000],
+          "ipfs://test",
+          10000,
+          10,
+          addr1.address,
+        );
+        await expect(tx).to.emit(factory, "CollectionDeployed");
+        await expect(tx).to.emit(factory, "CollectionCreated");
       });
     });
   });

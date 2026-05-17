@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Nonces.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./Errors.sol";
 
 /**
  * @title ATTRToken
@@ -34,9 +35,9 @@ contract ATTRToken is ERC20, ERC20Burnable, ERC20Capped, ERC20Permit, ERC20Votes
         ERC20Capped(cap_)
         ERC20Permit("Attribute Point")
     {
-        require(treasury_ != address(0), "Treasury cannot be zero address");
-        require(cap_ > 0, "Cap must be greater than zero");
-        require(initialSupply_ <= cap_, "Initial supply exceeds cap");
+        if (treasury_ == address(0)) revert ZeroAddress();
+        if (cap_ == 0) revert InvalidMaxSupply();
+        if (initialSupply_ > cap_) revert MaxSupplyExceeded();
         
         // Grant Deployer the Admin and Minter roles
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);

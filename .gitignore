@@ -4,11 +4,11 @@ node_modules/
 artifacts/
 cache/
 .vscode/
-typechain-types/
 coverage/
 coverage.json
 foundry-cache/
 foundry-out/
+typechain-types/
 broadcast/
 lib/
 *.log

@@ -12,6 +12,8 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./Errors.sol";
+import "./ATTRSpender.sol";
 
 /**
  * @title NFTCollection
@@ -36,8 +38,14 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
     // Track mints per wallet
     mapping(address => uint256) private _mintedCounts;
     
-    // Receiver for mint payments
+    // Receiver for base mint payments
     address public paymentReceiver;
+
+    // Receiver for creator tips (may equal paymentReceiver)
+    address public tipReceiver;
+
+    // Shared ATTR payment proxy (set by ATTRDeployer; address(0) disables ATTR routing)
+    ATTRSpender public attrSpender;
 
     /// @notice Represents a voucher to mint an NFT
     struct NFTVoucher {
@@ -45,24 +53,23 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
         string uri;
         string nonce;
         address currency; // address(0) for ETH, otherwise ERC20 address
-        uint256 minPrice;
+        uint256 basePrice; // base mint payment routed to paymentReceiver
+        uint256 creatorTip; // optional tip routed to tipReceiver
         uint256 deadline;
         bytes signature;
     }
 
     // EIP-712 TypeHash
     bytes32 private constant _VOUCHER_TYPEHASH =
-        keccak256("NFTVoucher(address recipient,string uri,string nonce,address currency,uint256 minPrice,uint256 deadline)");
+        keccak256("NFTVoucher(address recipient,string uri,string nonce,address currency,uint256 basePrice,uint256 creatorTip,uint256 deadline)");
 
     // Track used nonces to prevent replay attacks
     mapping(string => bool) private usedNonces;
 
-    // Errors
-    error InvalidSignature();
-    error VoucherAlreadyUsed();
-
     // Events
     event NFTMinted(address indexed recipient, uint256 indexed tokenId, string tokenURI);
+    event ContractURIUpdated(string oldURI, string newURI);
+    event TipReceiverUpdated(address indexed oldReceiver, address indexed newReceiver);
 
     /**
      * @dev Constructor sets the collection name and symbol
@@ -83,14 +90,20 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
         string memory contractURI_,
         uint256 maxSupply_,
         address paymentReceiver_,
-        uint256 maxMintPerWallet_
+        uint256 maxMintPerWallet_,
+        address tipReceiver_,
+        address attrSpender_
     ) ERC721(name_, symbol_) Ownable(initialOwner) EIP712("NFTCollection", "1") {
+        if (paymentReceiver_ == address(0)) revert ZeroAddress();
+        if (tipReceiver_ == address(0)) revert ZeroAddress();
         _nextTokenId = 1; // Start token IDs at 1
         _setDefaultRoyalty(royaltyReceiver, royaltyFeeNumerator);
         _contractURI = contractURI_;
         MAX_SUPPLY = maxSupply_;
         paymentReceiver = paymentReceiver_;
         MAX_MINT_PER_WALLET = maxMintPerWallet_;
+        tipReceiver = tipReceiver_;
+        attrSpender = ATTRSpender(attrSpender_);
     }
 
     /**
@@ -99,6 +112,21 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
      */
     function contractURI() public view returns (string memory) {
         return _contractURI;
+    }
+
+    /// @notice Updates the collection-level metadata URI. Owner only.
+    function setContractURI(string calldata newURI) external onlyOwner {
+        string memory oldURI = _contractURI;
+        _contractURI = newURI;
+        emit ContractURIUpdated(oldURI, newURI);
+    }
+
+    /// @notice Updates the tip receiver address. Owner only.
+    function setTipReceiver(address newTipReceiver) external onlyOwner {
+        if (newTipReceiver == address(0)) revert ZeroAddress();
+        address old = tipReceiver;
+        tipReceiver = newTipReceiver;
+        emit TipReceiverUpdated(old, newTipReceiver);
     }
 
     /**
@@ -153,12 +181,12 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
         nonReentrant
         returns (uint256) 
     {
-        require(!usedNonces[voucher.nonce], "Nonce already used");
-        require(block.timestamp <= voucher.deadline, "Voucher expired");
-        require(_mintedCounts[voucher.recipient] < MAX_MINT_PER_WALLET, "Max mint per wallet exceeded");
+        if (usedNonces[voucher.nonce]) revert VoucherAlreadyUsed();
+        if (block.timestamp > voucher.deadline) revert VoucherExpired();
+        if (_mintedCounts[voucher.recipient] >= MAX_MINT_PER_WALLET) revert MaxMintPerWalletExceeded();
 
         address signer = _verify(voucher);
-        require(owner() == signer, "Invalid voucher signature");
+        if (owner() != signer) revert InvalidSignature();
 
         // Checks-Effects-Interactions: mark nonce used and bump mint counter
         // BEFORE any external call (ETH forward / ERC20 transfer) to prevent
@@ -167,41 +195,55 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
         _mintedCounts[voucher.recipient]++;
 
         // Handle Payment with Permit
-        if (voucher.minPrice > 0) {
+        uint256 totalPayment = voucher.basePrice + voucher.creatorTip;
+        if (totalPayment > 0) {
             if (voucher.currency == address(0)) {
-                // ETH Payment
-                require(msg.value >= voucher.minPrice, "Insufficient ETH sent");
-                
-                // Forward ETH to payment receiver
-                (bool success, ) = payable(paymentReceiver).call{value: msg.value}("");
-                require(success, "Failed to send ETH");
-            } else {
-                // ERC20 Payment with Permit
-                require(msg.value == 0, "ETH sent with ERC20 payment");
-                
-                // Execute permit to approve this contract
-                // The permit allows the contract to transfer tokens on behalf of msg.sender
-                // Parameter order: owner, spender, value, deadline, v, r, s
-                try IERC20Permit(voucher.currency).permit(
-                    msg.sender,
-                    address(this),
-                    voucher.minPrice,
-                    permit.deadline,
-                    permit.v,
-                    permit.r,
-                    permit.s
-                ) {
-                    // Permit executed successfully
-                } catch Error(string memory reason) {
-                    // Permit failed - revert with reason
-                    revert(reason);
-                } catch {
-                    // Permit failed for unknown reason
-                    revert("Permit execution failed");
+                // ETH Payment: exact amount required
+                if (msg.value != totalPayment) revert ExactETHRequired(totalPayment, msg.value);
+                if (voucher.basePrice > 0) {
+                    (bool ok1, ) = payable(paymentReceiver).call{value: voucher.basePrice}("");
+                    if (!ok1) revert TransferFailed();
                 }
-                
-                // Transfer tokens from user to payment receiver
-                IERC20(voucher.currency).safeTransferFrom(msg.sender, paymentReceiver, voucher.minPrice);
+                if (voucher.creatorTip > 0) {
+                    // slither-disable-next-line arbitrary-send-eth
+                    (bool ok2, ) = payable(tipReceiver).call{value: voucher.creatorTip}("");
+                    if (!ok2) revert TransferFailed();
+                }
+            } else {
+                // ERC20 Payment
+                if (msg.value != 0) revert ETHWithERC20Payment();
+
+                if (address(attrSpender) != address(0) &&
+                    voucher.currency == address(attrSpender.ATTR_TOKEN())) {
+                    // ATTR: route through shared spender (user approved ATTRSpender directly)
+                    attrSpender.collectPayment(
+                        msg.sender, paymentReceiver, tipReceiver,
+                        voucher.basePrice, voucher.creatorTip
+                    );
+                } else {
+                    // Other ERC20 with Permit
+                    try IERC20Permit(voucher.currency).permit(
+                        msg.sender,
+                        address(this),
+                        totalPayment,
+                        permit.deadline,
+                        permit.v,
+                        permit.r,
+                        permit.s
+                    ) {
+                        // Permit executed successfully
+                    } catch Error(string memory reason) {
+                        revert(reason);
+                    } catch {
+                        revert("Permit execution failed");
+                    }
+                    if (voucher.basePrice > 0) {
+                        IERC20(voucher.currency).safeTransferFrom(msg.sender, paymentReceiver, voucher.basePrice);
+                    }
+                    if (voucher.creatorTip > 0) {
+                        IERC20(voucher.currency).safeTransferFrom(msg.sender, tipReceiver, voucher.creatorTip);
+                    }
+                }
             }
         }
 
@@ -222,12 +264,12 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
         nonReentrant
         returns (uint256) 
     {
-        require(!usedNonces[voucher.nonce], "Nonce already used");
-        require(block.timestamp <= voucher.deadline, "Voucher expired");
-        require(_mintedCounts[voucher.recipient] < MAX_MINT_PER_WALLET, "Max mint per wallet exceeded");
+        if (usedNonces[voucher.nonce]) revert VoucherAlreadyUsed();
+        if (block.timestamp > voucher.deadline) revert VoucherExpired();
+        if (_mintedCounts[voucher.recipient] >= MAX_MINT_PER_WALLET) revert MaxMintPerWalletExceeded();
 
         address signer = _verify(voucher);
-        require(owner() == signer, "Invalid voucher signature");
+        if (owner() != signer) revert InvalidSignature();
 
         // Checks-Effects-Interactions: mark nonce used and bump mint counter
         // BEFORE any external call (ETH forward / ERC20 transfer) to prevent
@@ -236,27 +278,46 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
         _mintedCounts[voucher.recipient]++;
 
         // Handle Payment (assumes approval already exists)
-        if (voucher.minPrice > 0) {
+        uint256 totalPayment = voucher.basePrice + voucher.creatorTip;
+        if (totalPayment > 0) {
             if (voucher.currency == address(0)) {
-                // ETH Payment
-                require(msg.value >= voucher.minPrice, "Insufficient ETH sent");
-                
-                // Forward ETH to payment receiver
-                (bool success, ) = payable(paymentReceiver).call{value: msg.value}("");
-                require(success, "Failed to send ETH");
+                // ETH Payment: exact amount required
+                if (msg.value != totalPayment) revert ExactETHRequired(totalPayment, msg.value);
+                if (voucher.basePrice > 0) {
+                    (bool ok1, ) = payable(paymentReceiver).call{value: voucher.basePrice}("");
+                    if (!ok1) revert TransferFailed();
+                }
+                if (voucher.creatorTip > 0) {
+                    // slither-disable-next-line arbitrary-send-eth
+                    (bool ok2, ) = payable(tipReceiver).call{value: voucher.creatorTip}("");
+                    if (!ok2) revert TransferFailed();
+                }
             } else {
                 // ERC20 Payment - assumes approval exists from separate transaction or batch
-                require(msg.value == 0, "ETH sent with ERC20 payment");
-                
-                // Transfer tokens from voucher recipient to payment receiver.
-                // `voucher.recipient` is used instead of `msg.sender` for ERC-4337
-                // smart account compatibility: with wallet_sendCalls, msg.sender is
-                // the EntryPoint/bundler, not the token owner. The recipient field is
-                // safe here because the entire voucher struct (including recipient) is
-                // covered by the owner's EIP-712 signature verified above — an attacker
-                // cannot substitute an arbitrary address without invalidating the sig.
-                // slither-disable-next-line arbitrary-send-erc20
-                IERC20(voucher.currency).safeTransferFrom(voucher.recipient, paymentReceiver, voucher.minPrice);
+                if (msg.value != 0) revert ETHWithERC20Payment();
+
+                if (address(attrSpender) != address(0) &&
+                    voucher.currency == address(attrSpender.ATTR_TOKEN())) {
+                    // ATTR: route through shared spender.
+                    // `voucher.recipient` is used for ERC-4337 smart account compatibility;
+                    // it is safe because the full voucher struct is covered by the owner's
+                    // EIP-712 signature verified above.
+                    // slither-disable-next-line arbitrary-send-erc20
+                    attrSpender.collectPayment(
+                        voucher.recipient, paymentReceiver, tipReceiver,
+                        voucher.basePrice, voucher.creatorTip
+                    );
+                } else {
+                    // Other ERC20 — direct split transfer.
+                    if (voucher.basePrice > 0) {
+                        // slither-disable-next-line arbitrary-send-erc20
+                        IERC20(voucher.currency).safeTransferFrom(voucher.recipient, paymentReceiver, voucher.basePrice);
+                    }
+                    if (voucher.creatorTip > 0) {
+                        // slither-disable-next-line arbitrary-send-erc20
+                        IERC20(voucher.currency).safeTransferFrom(voucher.recipient, tipReceiver, voucher.creatorTip);
+                    }
+                }
             }
         }
 
@@ -267,9 +328,9 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
      * @dev Internal function to handle minting logic
      */
     function _mintNFT(address recipient, string memory uri) internal returns (uint256) {
-        require(recipient != address(0), "Cannot mint to zero address");
-        require(bytes(uri).length > 0, "URI cannot be empty");
-        require(_nextTokenId <= MAX_SUPPLY, "Max supply exceeded");
+        if (recipient == address(0)) revert ZeroAddress();
+        if (bytes(uri).length == 0) revert EmptyURI();
+        if (_nextTokenId > MAX_SUPPLY) revert MaxSupplyExceeded();
 
         uint256 tokenId = _nextTokenId++;
         _safeMint(recipient, tokenId);
@@ -289,7 +350,8 @@ contract NFTCollection is ERC721URIStorage, ERC2981, Ownable, EIP712, Pausable, 
             keccak256(bytes(voucher.uri)),
             keccak256(bytes(voucher.nonce)),
             voucher.currency,
-            voucher.minPrice,
+            voucher.basePrice,
+            voucher.creatorTip,
             voucher.deadline
         )));
         return ECDSA.recover(digest, voucher.signature);

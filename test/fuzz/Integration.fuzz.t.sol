@@ -45,11 +45,13 @@ contract IntegrationFuzzTest is Test {
             "ipfs://contract",
             10000,
             treasury,
-            10
+            10,
+            treasury,     // tipReceiver_
+            address(0)    // attrSpender_ (disabled)
         );
         
         // Deploy Factory
-        deployer = new ATTRDeployer(owner);
+        deployer = new ATTRDeployer(owner, address(0));
         
         // Fund minter
         attr.grantRole(attr.MINTER_ROLE(), owner);
