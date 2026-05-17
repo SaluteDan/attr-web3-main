@@ -1,6 +1,6 @@
 {
   "name": "attr-web3",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": false,
   "description": "ATTR smart contracts, deployment scripts, and contract verification workers.",
   "main": "dist/src/index.js",
@@ -24,6 +24,7 @@
   "files": [
     "bin/",
     "dist/",
+    "dist/typechain-types/",
     "typechain-types/",
     "contracts/",
     "docs/",
@@ -37,7 +38,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && npm run build:typechain && npm run build:symlink",
+    "build": "tsc -p tsconfig.build.json && npm run build:typechain",
     "build:symlink": "node scripts/util/build-symlink.js",
     "build:typechain": "tsc -p tsconfig.typechain.json",
     "prepublishOnly": "npm run compile && npm run build",

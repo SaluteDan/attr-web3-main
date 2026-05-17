@@ -10,5 +10,6 @@ if (fs.existsSync(symlinkPath)) {
   fs.rmSync(symlinkPath, { recursive: true, force: true });
 }
 
-// Create symlink (use 'dir' for cross-platform compatibility)
-fs.symlinkSync(targetPath, symlinkPath, "dir");
+// Use a relative path so the symlink works both locally and in the published npm package
+const relativeTarget = path.relative(path.dirname(symlinkPath), targetPath);
+fs.symlinkSync(relativeTarget, symlinkPath, "dir");

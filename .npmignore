@@ -1,0 +1,13 @@
+.env
+.env.production
+node_modules/
+artifacts/
+cache/
+.vscode/
+coverage/
+coverage.json
+foundry-cache/
+foundry-out/
+broadcast/
+lib/
+*.log

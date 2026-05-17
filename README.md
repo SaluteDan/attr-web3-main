@@ -54,3 +54,104 @@ MembershipSaleSplitter
   50% → Treasury
   50% → MembershipFeeDistributor → NFT holders pro-rata
 ```
+
+## Roadmap / Planned Changes
+
+### Tier-Based Voting Weight
+
+**Status:** Architecture prepared, implementation pending
+
+MembershipToken uses `ERC721Votes` which defaults to **1 vote per NFT**. Future upgrade will implement tier-weighted voting:
+
+- Tier 1 holders: 2x voting weight
+- Tier 2 holders: 1x voting weight
+
+**Implementation approach:** Override `getVotes()` and `getPastVotes()` to multiply by tier multiplier. Consider adding `votesPerTier` mapping now (defaulting to 1) to enable future governance upgrades without redeployment.
+
+### Tier-Based Fee Distribution
+
+**Status:** Requires contract modification
+
+Currently `MembershipFeeDistributor` distributes LP fees **equally per token** regardless of tier. Future upgrade will weight distributions by tier:
+
+- Tier 1 holders: Bonus multiplier on claimable rewards
+- Requires: `tierMultipliers` mapping + modified `claimETH()`/`claimERC20()` logic
+
+### Backend TypeScript Integration
+
+The package now exposes TypeChain-generated types for contract interaction:
+
+```typescript
+import {
+  ATTRToken,
+  ATTRToken__factory,
+  MembershipToken,
+  MembershipToken__factory,
+  MembershipFeeDistributor,
+  NFTVoucherStruct,
+} from "attr-web3";
+
+// Factory classes include ABI + bytecode for deployment/attachment
+const token = ATTRToken__factory.connect(address, provider);
+
+// Struct types for contract calls
+const voucher: NFTVoucherStruct = {
+  tokenId: 1n,
+  minPrice: 1000000000000000000n, // 1 ETH
+  uri: "ipfs://...",
+  creator: "0x...",
+  royaltyBasisPoints: 500,
+  signature: "0x...",
+};
+```
+
+**Backend usage:**
+
+- Import contract types for type-safe viem/ethers interactions
+- Use factory classes for deterministic contract attachment
+- Access struct types for encoding complex parameters
+
+### Backend Rewiring Guide
+
+**Before (string-based, no type safety):**
+
+```typescript
+import { ethers } from "hardhat";
+
+// String lookup - no compile-time validation
+const MembershipToken = await ethers.getContractFactory("MembershipToken");
+const membership = MembershipToken.attach(address);
+
+// Method calls are untyped - typos only fail at runtime
+await membership.adminMintMembership(recipient, tier, uri); // could typo method name
+```
+
+**After (type-safe with exposed interfaces):**
+
+```typescript
+import { MembershipToken, MembershipToken__factory } from "attr-web3";
+
+// Factory class provides typed contract instance
+const membership: MembershipToken = MembershipToken__factory.connect(
+  address,
+  signer,
+);
+
+// Full autocomplete + compile-time checking
+await membership.adminMintMembership(
+  recipient, // string - TypeScript validates
+  tier, // number
+  metadataURI, // string
+);
+
+// Access on-chain data with typed returns
+const tier: bigint = await membership.tokenTiers(tokenId);
+const price: bigint = await membership.tierPrices(tier);
+```
+
+**Key Benefits:**
+
+- Compile-time validation of contract method names
+- Type checking on all parameters (no more passing strings where numbers expected)
+- Auto-completion for contract state variables and methods
+- Struct types for complex parameters (e.g., `NFTVoucherStruct`)
