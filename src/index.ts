@@ -1,42 +1,84 @@
 // ─── ATTR Protocol — Public TypeScript API ────────────────────────────────────
 //
-// Re-exports all contract types, factory classes, and struct types generated
-// by Hardhat TypeChain from the compiled Solidity sources.
+// Hardhat v3 + viem version — exports contract ABIs for viem integration
 //
 // Usage:
-//   import type { ATTRToken, NFTCollection } from "attr-web3";
-//   import { ATTRToken__factory, NFTCollection__factory } from "attr-web3";
-//   import type { NFTVoucherStruct } from "attr-web3";
+//   import { NFTCollectionABI } from "attr-web3";
+//   import type { NFTVoucher, PermitSignature } from "attr-web3";
+//
+//   const contract = getContract({
+//     address: contractAddress,
+//     abi: NFTCollectionABI,
+//     client: publicClient
+//   });
 // ──────────────────────────────────────────────────────────────────────────────
 
-// ── Contract interfaces ────────────────────────────────────────────────────────
-export type { ATTRToken } from "../typechain-types/contracts/ATTRToken";
-export type { ATTRDeployer } from "../typechain-types/contracts/ATTRDeployer";
-export type { ATTRSpender } from "../typechain-types/contracts/ATTRSpender";
-export type { NFTCollection } from "../typechain-types/contracts/NFTCollection";
-export type { MembershipToken } from "../typechain-types/contracts/MembershipToken";
-export type { MembershipSaleSplitter } from "../typechain-types/contracts/MembershipSaleSplitter";
-export type { MembershipFeeDistributor } from "../typechain-types/contracts/MembershipFeeDistributor";
-export type { PaymentSplitter } from "../typechain-types/contracts/PaymentSplitter";
+import ATTRTokenJSON from "../artifacts/contracts/ATTRToken.sol/ATTRToken.json" with { type: "json" };
+import ATTRDeployerJSON from "../artifacts/contracts/ATTRDeployer.sol/ATTRDeployer.json" with { type: "json" };
+import ATTRSpenderJSON from "../artifacts/contracts/ATTRSpender.sol/ATTRSpender.json" with { type: "json" };
+import NFTCollectionJSON from "../artifacts/contracts/NFTCollection.sol/NFTCollection.json" with { type: "json" };
+import MembershipTokenJSON from "../artifacts/contracts/MembershipToken.sol/MembershipToken.json" with { type: "json" };
+import MembershipSaleSplitterJSON from "../artifacts/contracts/MembershipSaleSplitter.sol/MembershipSaleSplitter.json" with { type: "json" };
+import MembershipFeeDistributorJSON from "../artifacts/contracts/MembershipFeeDistributor.sol/MembershipFeeDistributor.json" with { type: "json" };
+import PaymentSplitterJSON from "../artifacts/contracts/PaymentSplitter.sol/PaymentSplitter.json" with { type: "json" };
 
-// ── Factory classes (carry ABI + bytecode; needed for deployment/attachment) ──
-export { ATTRToken__factory } from "../typechain-types/factories/contracts/ATTRToken__factory";
-export { ATTRDeployer__factory } from "../typechain-types/factories/contracts/ATTRDeployer__factory";
-export { ATTRSpender__factory } from "../typechain-types/factories/contracts/ATTRSpender__factory";
-export { NFTCollection__factory } from "../typechain-types/factories/contracts/NFTCollection__factory";
-export { MembershipToken__factory } from "../typechain-types/factories/contracts/MembershipToken__factory";
-export { MembershipSaleSplitter__factory } from "../typechain-types/factories/contracts/MembershipSaleSplitter__factory";
-export { MembershipFeeDistributor__factory } from "../typechain-types/factories/contracts/MembershipFeeDistributor__factory";
-export { PaymentSplitter__factory } from "../typechain-types/factories/contracts/PaymentSplitter__factory";
+// ── Contract ABIs ────────────────────────────────────────────────────────────
+export const ATTRTokenABI = ATTRTokenJSON.abi;
+export const ATTRDeployerABI = ATTRDeployerJSON.abi;
+export const ATTRSpenderABI = ATTRSpenderJSON.abi;
+export const NFTCollectionABI = NFTCollectionJSON.abi;
+export const MembershipTokenABI = MembershipTokenJSON.abi;
+export const MembershipSaleSplitterABI = MembershipSaleSplitterJSON.abi;
+export const MembershipFeeDistributorABI = MembershipFeeDistributorJSON.abi;
+export const PaymentSplitterABI = PaymentSplitterJSON.abi;
 
-// ── Struct / parameter types (namespaced by TypeChain) ────────────────────────
+// ── Bytecode (for deployment) ────────────────────────────────────────────────
+export const ATTRTokenBytecode = ATTRTokenJSON.bytecode;
+export const ATTRDeployerBytecode = ATTRDeployerJSON.bytecode;
+export const ATTRSpenderBytecode = ATTRSpenderJSON.bytecode;
+export const NFTCollectionBytecode = NFTCollectionJSON.bytecode;
+export const MembershipTokenBytecode = MembershipTokenJSON.bytecode;
+export const MembershipSaleSplitterBytecode = MembershipSaleSplitterJSON.bytecode;
+export const MembershipFeeDistributorBytecode = MembershipFeeDistributorJSON.bytecode;
+export const PaymentSplitterBytecode = PaymentSplitterJSON.bytecode;
 
-// NFTCollection — voucher and permit structs
-export type { NFTCollection as NFTCollectionTypes } from "../typechain-types/contracts/NFTCollection";
-// Flat re-exports for convenience
-import type { NFTCollection as _NFTCollection } from "../typechain-types/contracts/NFTCollection";
-export type NFTVoucherStruct = _NFTCollection.NFTVoucherStruct;
-export type NFTVoucherStructOutput = _NFTCollection.NFTVoucherStructOutput;
-export type PermitSignatureStruct = _NFTCollection.PermitSignatureStruct;
-export type PermitSignatureStructOutput =
-  _NFTCollection.PermitSignatureStructOutput;
+// ── Viem-compatible types ───────────────────────────────────────────────────
+// These mirror the contract structs for use with viem
+
+/**
+ * NFTVoucher struct for viem — used in redeem/redeemWithApproval functions
+ */
+export interface NFTVoucher {
+  /** Recipient address (user who receives the NFT) */
+  recipient: `0x${string}`;
+  /** IPFS URI for token metadata */
+  uri: string;
+  /** Unique nonce for replay protection */
+  nonce: string;
+  /** Payment token address (0x0 for ETH, otherwise ERC20) */
+  currency: `0x${string}`;
+  /** Base mint price in wei (goes to paymentReceiver) */
+  basePrice: bigint;
+  /** Optional creator tip in wei (goes to tipReceiver) */
+  creatorTip: bigint;
+  /** Voucher expiration timestamp */
+  deadline: bigint;
+  /** EIP-712 signature from contract owner */
+  signature: `0x${string}`;
+}
+
+/**
+ * PermitSignature struct for viem — for ERC20Permit gasless approval
+ */
+export interface PermitSignature {
+  /** Signature recovery id (27 or 28) */
+  v: number;
+  /** r component of ECDSA signature */
+  r: `0x${string}`;
+  /** s component of ECDSA signature */
+  s: `0x${string}`;
+  /** Permit deadline timestamp */
+  deadline: bigint;
+  /** Permit nonce */
+  nonce: bigint;
+}

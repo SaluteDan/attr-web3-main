@@ -1,6 +1,6 @@
 {
   "name": "attr-web3",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "private": false,
   "description": "ATTR smart contracts, deployment scripts, and contract verification workers.",
   "main": "dist/src/index.js",
@@ -9,10 +9,6 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
-    },
-    "./typechain-types/*": {
-      "types": "./dist/typechain-types/*.d.ts",
-      "default": "./dist/typechain-types/*.js"
     },
     "./verify": {
       "default": "./bin/verify-contract.cjs"
@@ -32,13 +28,11 @@
     "slither.config.json",
     "tsconfig.json",
     "tsconfig.build.json",
-    "tsconfig.typechain.json",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && npm run build:typechain",
+    "build": "tsc -p tsconfig.build.json",
     "build:symlink": "node scripts/util/build-symlink.js",
-    "build:typechain": "tsc -p tsconfig.typechain.json",
     "prepublishOnly": "npm run compile && npm run build",
     "compile": "hardhat compile",
     "test": "hardhat test",
@@ -68,7 +62,7 @@
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@openzeppelin/contracts": "^5.4.0",
     "dotenv": "^16.3.1",
-    "hardhat": "^2.27.0",
+    "hardhat": "^3.4.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.1.6",
     "viem": "^2.40.3"
@@ -84,5 +78,6 @@
   "peerDependencies": {
     "ethers": "^6.0.0"
   },
-  "license": "ISC"
+  "license": "ISC",
+  "type": "module"
 }
