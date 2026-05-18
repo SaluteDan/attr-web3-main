@@ -74,6 +74,8 @@
     "viem": "^2.40.3"
   },
   "devDependencies": {
+    "@nomicfoundation/hardhat-verify": "^3.0.17",
+    "@nomicfoundation/hardhat-viem": "^3.0.7",
     "@types/node": "^20.4.5",
     "solhint": "^6.2.1",
     "solidity-coverage": "^0.8.17",

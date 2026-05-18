@@ -1,5 +1,6 @@
 import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-toolbox";
+import "@nomicfoundation/hardhat-viem";
+import "@nomicfoundation/hardhat-verify";
 import "solidity-coverage";
 import * as dotenv from "dotenv";
 
@@ -36,34 +37,13 @@ const config: HardhatUserConfig = {
     cache: "./cache",
     artifacts: "./artifacts",
   },
-  sourcify: {
-    enabled: true,
-  },
-  etherscan: {
-    // Etherscan V2 uses a SINGLE unified api key across all supported chains
-    // (Base Sepolia, Base Mainnet, etc). The per-network object form is V1
-    // and is deprecated — passing it causes the plugin to omit the chainid
-    // query param on V2 endpoints, which fails with "Missing chainid parameter".
-    apiKey: process.env.BASESCAN_API_KEY || "",
-    customChains: [
-      {
-        network: "baseSepolia",
-        chainId: 84532,
-        urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=84532",
-          browserURL: "https://sepolia.basescan.org",
-        },
+  verify: {
+    etherscan: {
+      apiKey: {
+        baseSepolia: process.env.BASESCAN_API_KEY || "",
+        base: process.env.BASESCAN_API_KEY || "",
       },
-      {
-        network: "baseMainnet",
-        chainId: 8453,
-        urls: {
-          apiURL: "https://api.etherscan.io/v2/api?chainid=8453",
-          browserURL: "https://basescan.org",
-        },
-      },
-    ],
-    enabled: true,
+    },
   },
 };
 
