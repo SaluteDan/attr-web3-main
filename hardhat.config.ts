@@ -17,6 +17,7 @@ const config: HardhatUserConfig = {
       evmVersion: "cancun",
     },
   },
+  defaultNetwork: "baseSepolia",
   networks: {
     baseSepolia: {
       url: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",

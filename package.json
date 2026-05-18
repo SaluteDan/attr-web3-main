@@ -11,8 +11,8 @@
       "default": "./dist/src/index.js"
     },
     "./typechain-types/*": {
-      "types": "./typechain-types/*.d.ts",
-      "default": "./typechain-types/*.js"
+      "types": "./dist/typechain-types/*.d.ts",
+      "default": "./dist/typechain-types/*.js"
     },
     "./verify": {
       "default": "./bin/verify-contract.cjs"
@@ -24,8 +24,6 @@
   "files": [
     "bin/",
     "dist/",
-    "dist/typechain-types/",
-    "typechain-types/",
     "contracts/",
     "docs/",
     "scripts/",
@@ -80,6 +78,9 @@
     "solhint": "^6.2.1",
     "solidity-coverage": "^0.8.17",
     "tsx": "^4.21.0"
+  },
+  "peerDependencies": {
+    "ethers": "^6.0.0"
   },
   "license": "ISC"
 }
