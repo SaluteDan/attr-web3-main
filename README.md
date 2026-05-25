@@ -26,29 +26,32 @@ When installed as a package dependency, the backend calls the
 
 ## Contract Overview
 
-| Contract                   | Description                                                                                                                                                     |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ATTRToken`                | ERC20 governance token with capped supply, permit, votes, and access control                                                                                    |
-| `NFTCollection`            | Factory-deployed creator NFT with EIP-712 voucher minting, `basePrice + creatorTip` routing, mutable `contractURI`, and optional ATTR payment via `ATTRSpender` |
-| `ATTRDeployer`             | Factory for `NFTCollection` + `PaymentSplitter` pairs; auto-authorises each collection in `ATTRSpender`                                                         |
-| `ATTRSpender`              | Shared ATTR-token payment proxy — users approve once, all authorised collections pull through this contract                                                     |
-| `MembershipToken`          | Tiered membership NFT (ERC721Votes + ERC2981) that absorbs the former `GovernanceNFT`; max 50 000 tokens                                                        |
-| `MembershipSaleSplitter`   | Immutable 70/30 ETH splitter — routes membership sale proceeds to treasury (70%) and LP capital (30%)                                                           |
-| `MembershipFeeDistributor` | Synthetix-style index distributor — deposits ETH/ERC20 LP fee proceeds and lets membership NFT holders claim their pro-rata share                               |
-| `PaymentSplitter`          | Pull-payment splitter for royalty and mint proceeds; supports dynamic payee/share updates                                                                       |
+| Contract                     | Description                                                                                                                                                     |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ATTRToken`                  | ERC20 governance token with capped supply, permit, votes, and access control                                                                                    |
+| `NFTCollection`              | Factory-deployed creator NFT with EIP-712 voucher minting, `basePrice + creatorTip` routing, mutable `contractURI`, and optional ATTR payment via `ATTRSpender` |
+| `ATTRDeployer`               | Factory for `NFTCollection` + `PaymentSplitter` pairs; auto-authorises each collection in `ATTRSpender`                                                         |
+| `ATTRSpender`                | Shared ATTR-token payment proxy — users approve once, all authorised collections pull through this contract                                                     |
+| `MembershipToken`            | Tiered membership NFT (ERC721Votes + ERC2981) that absorbs the former `GovernanceNFT`; max 50 000 tokens                                                        |
+| `MembershipSaleSplitter`     | Immutable 70/30 ETH splitter — routes membership sale proceeds to treasury (70%) and LP capital (30%)                                                           |
+| `MembershipFeeDistributor`   | Synthetix-style index distributor — deposits ETH/ERC20 LP fee proceeds and lets membership NFT holders claim their pro-rata share                               |
+| `VestingLockCampaign`        | Reusable lock-to-earn vesting campaign; users lock ATTR for configurable terms and claim prefunded rewards                                                      |
+| `VestingLockCampaignFactory` | Owner-controlled factory for deploying isolated `VestingLockCampaign` instances with different campaign parameters                                              |
+| `PaymentSplitter`            | Pull-payment splitter for royalty and mint proceeds; supports dynamic payee/share updates                                                                       |
 
 ## Deployment Sequence
 
 Deploy contracts in this order for proper integration:
 
-| Step | Contract                   | Script                                       | Dependencies                                          | Notes                                           |
-| ---- | -------------------------- | -------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------- |
-| 1    | `ATTRToken`                | `scripts/deploy/token.ts`                    | None                                                  | ERC20 governance token                          |
-| 2    | `ATTRSpender`              | `scripts/deploy/attrSpender.ts`              | ATTR_TOKEN_ADDRESS                                    | Shared payment proxy for collections            |
-| 3    | `ATTRDeployer`             | `scripts/deploy/factory.ts`                  | ATTR_SPENDER_CONTRACT (optional)                      | Collection factory; auto-authorizes collections |
-| 4    | `MembershipSaleSplitter`   | `scripts/deploy/membershipSaleSplitter.ts`   | PLATFORM_TREASURY_ADDRESS, LIQUIDITY_RECEIVER_ADDRESS | 70/30 ETH splitter for membership sales         |
-| 5    | `MembershipToken`          | `scripts/deploy/membershipToken.ts`          | None                                                  | Tiered membership NFT                           |
-| 6    | `MembershipFeeDistributor` | `scripts/deploy/membershipFeeDistributor.ts` | MEMBERSHIP_TOKEN_ADDRESS, DAO_MULTISIG_ADDRESS        | LP fee distributor for holders                  |
+| Step | Contract                     | Script                                       | Dependencies                                          | Notes                                           |
+| ---- | ---------------------------- | -------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------- |
+| 1    | `ATTRToken`                  | `scripts/deploy/token.ts`                    | None                                                  | ERC20 governance token                          |
+| 2    | `ATTRSpender`                | `scripts/deploy/attrSpender.ts`              | ATTR_TOKEN_ADDRESS                                    | Shared payment proxy for collections            |
+| 3    | `ATTRDeployer`               | `scripts/deploy/factory.ts`                  | ATTR_SPENDER_CONTRACT (optional)                      | Collection factory; auto-authorizes collections |
+| 4    | `MembershipSaleSplitter`     | `scripts/deploy/membershipSaleSplitter.ts`   | PLATFORM_TREASURY_ADDRESS, LIQUIDITY_RECEIVER_ADDRESS | 70/30 ETH splitter for membership sales         |
+| 5    | `MembershipToken`            | `scripts/deploy/membershipToken.ts`          | None                                                  | Tiered membership NFT                           |
+| 6    | `MembershipFeeDistributor`   | `scripts/deploy/membershipFeeDistributor.ts` | MEMBERSHIP_TOKEN_ADDRESS, DAO_MULTISIG_ADDRESS        | LP fee distributor for holders                  |
+| 7    | `VestingLockCampaignFactory` | `scripts/deploy/vestingFactory.ts`           | Owner/multisig address                                | Deploys reusable lock campaigns                 |
 
 ### Post-Deployment Wiring
 

@@ -105,3 +105,33 @@ error DuplicatePayee();
 
 /// @dev Nothing to release for the given account. [PaymentSplitter]
 error NoPaymentDue();
+
+/// @dev Campaign configuration value is invalid. [VestingLockCampaign, VestingLockCampaignFactory]
+error InvalidCampaignConfig();
+
+/// @dev Lock amount is below the campaign minimum. [VestingLockCampaign]
+error InsufficientLockAmount(uint256 required, uint256 supplied);
+
+/// @dev Campaign is not currently accepting locks. [VestingLockCampaign]
+error CampaignInactive();
+
+/// @dev Wallet already has a lock position in this campaign. [VestingLockCampaign]
+error PositionAlreadyExists();
+
+/// @dev Wallet does not have a lock position in this campaign. [VestingLockCampaign]
+error PositionNotFound();
+
+/// @dev Wallet lock has not reached the required duration. [VestingLockCampaign]
+error LockPeriodNotMet();
+
+/// @dev Campaign has reached its participant cap. [VestingLockCampaign]
+error ParticipantCapReached();
+
+/// @dev Wallet is not eligible to claim the campaign reward. [VestingLockCampaign]
+error RewardNotClaimable();
+
+/// @dev Wallet has already claimed or forfeited the campaign reward. [VestingLockCampaign]
+error RewardAlreadyFinalized();
+
+/// @dev Locked tokens cannot be withdrawn yet. [VestingLockCampaign]
+error WithdrawUnavailable();

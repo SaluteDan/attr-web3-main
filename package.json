@@ -1,6 +1,6 @@
 {
   "name": "attr-web3",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "private": false,
   "description": "ATTR smart contracts, deployment scripts, and contract verification workers.",
   "main": "dist/src/index.js",
@@ -45,6 +45,7 @@
     "check:balance": "hardhat run scripts/check/balance.ts",
     "deploy:token": "hardhat run scripts/deploy/token.ts",
     "deploy:factory": "hardhat run scripts/deploy/factory.ts",
+    "deploy:vesting-factory": "hardhat run scripts/deploy/vestingFactory.ts",
     "deploy:membership": "hardhat run scripts/deploy/membershipToken.ts",
     "diagnose:factory": "tsx scripts/diagnose-factory.ts"
   },

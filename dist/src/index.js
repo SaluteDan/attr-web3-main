@@ -20,6 +20,8 @@ import MembershipTokenJSON from "../artifacts/contracts/MembershipToken.sol/Memb
 import MembershipSaleSplitterJSON from "../artifacts/contracts/MembershipSaleSplitter.sol/MembershipSaleSplitter.json" with { type: "json" };
 import MembershipFeeDistributorJSON from "../artifacts/contracts/MembershipFeeDistributor.sol/MembershipFeeDistributor.json" with { type: "json" };
 import PaymentSplitterJSON from "../artifacts/contracts/PaymentSplitter.sol/PaymentSplitter.json" with { type: "json" };
+import VestingLockCampaignJSON from "../artifacts/contracts/VestingLockCampaign.sol/VestingLockCampaign.json" with { type: "json" };
+import VestingLockCampaignFactoryJSON from "../artifacts/contracts/VestingLockCampaignFactory.sol/VestingLockCampaignFactory.json" with { type: "json" };
 // ── Contract ABIs ────────────────────────────────────────────────────────────
 export const ATTRTokenABI = ATTRTokenJSON.abi;
 export const ATTRDeployerABI = ATTRDeployerJSON.abi;
@@ -29,6 +31,8 @@ export const MembershipTokenABI = MembershipTokenJSON.abi;
 export const MembershipSaleSplitterABI = MembershipSaleSplitterJSON.abi;
 export const MembershipFeeDistributorABI = MembershipFeeDistributorJSON.abi;
 export const PaymentSplitterABI = PaymentSplitterJSON.abi;
+export const VestingLockCampaignABI = VestingLockCampaignJSON.abi;
+export const VestingLockCampaignFactoryABI = VestingLockCampaignFactoryJSON.abi;
 // ── Bytecode (for deployment) ────────────────────────────────────────────────
 export const ATTRTokenBytecode = ATTRTokenJSON.bytecode;
 export const ATTRDeployerBytecode = ATTRDeployerJSON.bytecode;
@@ -38,4 +42,6 @@ export const MembershipTokenBytecode = MembershipTokenJSON.bytecode;
 export const MembershipSaleSplitterBytecode = MembershipSaleSplitterJSON.bytecode;
 export const MembershipFeeDistributorBytecode = MembershipFeeDistributorJSON.bytecode;
 export const PaymentSplitterBytecode = PaymentSplitterJSON.bytecode;
+export const VestingLockCampaignBytecode = VestingLockCampaignJSON.bytecode;
+export const VestingLockCampaignFactoryBytecode = VestingLockCampaignFactoryJSON.bytecode;
 //# sourceMappingURL=index.js.map
