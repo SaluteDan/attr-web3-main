@@ -30,9 +30,8 @@ Each campaign has immutable parameters:
 5. Frontend points `NEXT_PUBLIC_VESTING_LOCK_CAMPAIGN_ADDRESS` at the campaign.
 6. User approves ATTR directly to the campaign contract.
 7. User calls `lock(minLockAmount)`.
-8. After `lockPeriod`, user calls `claimReward()`.
-9. User calls `withdrawLocked()` to recover locked ATTR.
-10. After `campaignEnd + lockPeriod`, owner calls `sweepUnallocatedRewards(recipient)`.
+8. After `lockPeriod`, user calls `claimRewardAndWithdraw()` to claim the reward and recover locked ATTR in one transaction.
+9. After `campaignEnd + lockPeriod`, owner calls `sweepUnallocatedRewards(recipient)`.
 
 ## Deployment
 
@@ -120,4 +119,5 @@ This keeps custody and approval scope explicit. If we later want a single protoc
 - Use a multisig as factory/campaign owner.
 - Prefer `allowEarlyWithdraw = false` for strict “held for 30 days” vesting.
 - If `allowEarlyWithdraw = true`, early withdrawal returns principal but permanently forfeits the reward.
+- `claimReward()` and `withdrawLocked()` remain available as separate recovery/fallback actions, but the preferred user path is `claimRewardAndWithdraw()`.
 - `sweepUnallocatedRewards` is only available after `campaignEnd + lockPeriod`.

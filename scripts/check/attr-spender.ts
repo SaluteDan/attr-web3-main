@@ -10,25 +10,21 @@
  *   npx hardhat run scripts/check/attr-spender.ts --network baseMainnet
  */
 
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, zeroAddress } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import * as dotenv from "dotenv";
-import {
-  NFTCollectionABI,
-  ATTRDeployerABI,
-} from "../../src/index.js";
+import { NFTCollectionABI, ATTRDeployerABI } from "../../src/index.js";
 
 dotenv.config();
-
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 async function main() {
   // Determine network from environment or default to baseSepolia
   const networkName = process.env.HARDHAT_NETWORK || "baseSepolia";
   const chain = networkName === "baseMainnet" ? base : baseSepolia;
-  const rpcUrl = networkName === "baseMainnet"
-    ? process.env.BASE_MAINNET_RPC_URL || "https://mainnet.base.org"
-    : process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
+  const rpcUrl =
+    networkName === "baseMainnet"
+      ? process.env.BASE_MAINNET_RPC_URL || "https://mainnet.base.org"
+      : process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
 
   console.log(`\n🔍 Checking ATTRSpender addresses on ${chain.name}...\n`);
 
@@ -65,12 +61,16 @@ async function main() {
       functionName: "attrSpender",
     });
 
-    if (attrSpenderAddress === ZERO_ADDRESS) {
+    if (attrSpenderAddress === zeroAddress) {
       console.log(`   ⚠️  ATTRSpender: NOT SET (zero address)`);
-      console.log(`      → New collections will use collection address for approvals`);
+      console.log(
+        `      → New collections will use collection address for approvals`,
+      );
     } else {
       console.log(`   ✅ ATTRSpender: ${attrSpenderAddress}`);
-      console.log(`      → New collections will use this address for approvals`);
+      console.log(
+        `      → New collections will use this address for approvals`,
+      );
     }
   } catch (error: any) {
     console.error(`   ❌ Error reading factory: ${error.message}`);
@@ -87,12 +87,16 @@ async function main() {
         functionName: "attrSpender",
       });
 
-      if (attrSpenderAddress === ZERO_ADDRESS) {
+      if (attrSpenderAddress === zeroAddress) {
         console.log(`   ⚠️  ATTRSpender: NOT SET (zero address)`);
-        console.log(`      → Token approvals should target: collection address`);
+        console.log(
+          `      → Token approvals should target: collection address`,
+        );
       } else {
         console.log(`   ✅ ATTRSpender: ${attrSpenderAddress}`);
-        console.log(`      → Token approvals should target: ATTRSpender address`);
+        console.log(
+          `      → Token approvals should target: ATTRSpender address`,
+        );
       }
 
       // Additional info
@@ -116,7 +120,9 @@ async function main() {
 
   // Summary
   console.log("\n📊 Summary:");
-  console.log("   The ATTRSpender contract handles token approvals for minting.");
+  console.log(
+    "   The ATTRSpender contract handles token approvals for minting.",
+  );
   console.log("   If set, users approve the ATTRSpender, not the collection.");
   console.log("   This enables more flexible payment routing.");
   console.log();

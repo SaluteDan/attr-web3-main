@@ -168,6 +168,30 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Claim the campaign reward and withdraw locked staking tokens in one transaction.
+     * @dev Amounts are derived from contract state: `REWARD_AMOUNT` and the caller's position.
+     */
+    function claimRewardAndWithdraw() external nonReentrant {
+        if (!isRewardClaimable(msg.sender)) revert RewardNotClaimable();
+
+        Position storage position = positions[msg.sender];
+        if (position.withdrawn) revert WithdrawUnavailable();
+
+        uint256 lockedAmount = position.amount;
+        position.rewardClaimed = true;
+        position.withdrawn = true;
+        totalRewardsClaimed += REWARD_AMOUNT;
+        totalWithdrawn += lockedAmount;
+        ++rewardsClaimedCount;
+
+        REWARD_TOKEN.safeTransfer(msg.sender, REWARD_AMOUNT);
+        STAKING_TOKEN.safeTransfer(msg.sender, lockedAmount);
+
+        emit RewardClaimed(msg.sender, REWARD_AMOUNT);
+        emit LockedTokensWithdrawn(msg.sender, lockedAmount, false);
+    }
+
+    /**
      * @notice Withdraw locked staking tokens.
      * @dev Withdrawing before the lock period is only possible when configured,
      *      and permanently forfeits the reward.

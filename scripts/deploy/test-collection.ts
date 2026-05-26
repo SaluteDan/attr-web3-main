@@ -1,31 +1,31 @@
-import { ethers } from "hardhat";
-import { NFTCollection, NFTCollection__factory } from "../../typechain-types";
+import hre from "hardhat";
 
 async function main() {
-  const [deployer] = await ethers.getSigners();
-  console.log("Deploying NFTCollection with account:", deployer.address);
+  const connection = await hre.network.create();
+  const [deployer] = await connection.viem.getWalletClients();
 
-  // Deploy NFTCollection directly (bypassing factory)
-  const NFTCollection = await ethers.getContractFactory("NFTCollection");
-
-  const collection = await NFTCollection.deploy(
-    "Axis Collection", // name
-    "AXIS", // symbol
-    deployer.address, // initialOwner (backend wallet)
-    deployer.address, // royaltyReceiver
-    500, // royaltyFeeNumerator (5%)
-    "https://lavender-perfect-rattlesnake-216.mypinata.cloud/ipfs/QmTest", // contractURI (collection metadata)
-    1000, // maxSupply
-    deployer.address, // paymentReceiver
-    20, // maxMintPerWallet
+  console.log(
+    "Deploying NFTCollection with account:",
+    deployer.account.address,
   );
 
-  await collection.waitForDeployment();
-  const address = await collection.getAddress();
+  // Deploy NFTCollection directly (bypassing factory)
+  const collection = await connection.viem.deployContract("NFTCollection", [
+    "Axis Collection", // name
+    "AXIS", // symbol
+    deployer.account.address, // initialOwner (backend wallet)
+    deployer.account.address, // royaltyReceiver
+    500n, // royaltyFeeNumerator (5%)
+    "https://lavender-perfect-rattlesnake-216.mypinata.cloud/ipfs/QmTest", // contractURI
+    1000n, // maxSupply
+    deployer.account.address, // paymentReceiver
+    20n, // maxMintPerWallet
+    deployer.account.address, // tipReceiver
+    "0x0000000000000000000000000000000000000000" as `0x${string}`, // attrSpender
+  ]);
 
+  const address = collection.address;
   console.log("NFTCollection deployed to:", address);
-  console.log("Owner:", collection.owner());
-  console.log("Contract", collection);
   console.log("\nUse this address to test the mint flow.");
   console.log(
     "Update your test collection's contractAddress in the database to:",

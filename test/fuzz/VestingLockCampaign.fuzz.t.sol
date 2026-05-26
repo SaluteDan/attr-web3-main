@@ -136,6 +136,33 @@ contract VestingLockCampaignFuzzTest is Test {
     }
 
     /**
+     * @notice Fuzz: reward and principal can be claimed together after the lock period.
+     */
+    function testFuzz_ClaimRewardAndWithdrawPaysRewardAndPrincipal(uint256 amount, uint256 secondsAfterPeriod) public {
+        amount = bound(amount, MIN_LOCK, 1_000_000e18);
+        secondsAfterPeriod = bound(secondsAfterPeriod, 0, 365 days);
+        VestingLockCampaign campaign = _campaign(false, 0);
+
+        _fundRewards(campaign, REWARD);
+        _lock(campaign, amount);
+
+        vm.warp(block.timestamp + LOCK_PERIOD + secondsAfterPeriod);
+
+        uint256 aliceBefore = attr.balanceOf(alice);
+
+        vm.prank(alice);
+        campaign.claimRewardAndWithdraw();
+
+        VestingLockCampaign.Position memory position = campaign.getPosition(alice);
+        assertTrue(position.rewardClaimed, "reward claimed flag mismatch");
+        assertTrue(position.withdrawn, "withdrawn flag mismatch");
+        assertEq(campaign.rewardsClaimedCount(), 1, "claimed count mismatch");
+        assertEq(campaign.totalRewardsClaimed(), REWARD, "claimed total mismatch");
+        assertEq(campaign.totalWithdrawn(), amount, "withdrawn total mismatch");
+        assertEq(attr.balanceOf(alice), aliceBefore + REWARD + amount, "combined transfer mismatch");
+    }
+
+    /**
      * @notice Fuzz: early withdrawal either reverts or forfeits rewards based on campaign config.
      */
     function testFuzz_EarlyWithdrawBehavior(bool allowEarlyWithdraw, uint256 amount, uint256 elapsed) public {

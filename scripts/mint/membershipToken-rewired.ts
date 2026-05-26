@@ -1,16 +1,6 @@
-import { ethers } from "hardhat";
-import {
-  MembershipToken,
-  MembershipToken__factory,
-} from "../../src/index";
-
-interface MintConfig {
-  contractAddress: string;
-  recipients: string[];
-  tiers: number[];
-  metadataURIs: string[];
-  isBatch?: boolean;
-}
+import hre from "hardhat";
+import { getContract } from "viem";
+import { MembershipTokenABI } from "../../src/index.js";
 
 // ===== CONFIGURATION =====
 const CONFIG = {
@@ -23,35 +13,36 @@ const CONFIG = {
 // ========================
 
 async function mintMembershipToken() {
-  const args = process.argv.slice(2);
-
   try {
-    const [signer] = await ethers.getSigners();
+    const connection = await hre.network.create();
+    const [signer] = await connection.viem.getWalletClients();
+    const publicClient = await connection.viem.getPublicClient();
 
-    // Rewired: Use factory class for type-safe contract attachment
-    const membership = MembershipToken__factory.connect(
-      CONFIG.contractAddress,
-      signer
-    ) as MembershipToken;
+    const membership = getContract({
+      address: CONFIG.contractAddress as `0x${string}`,
+      abi: MembershipTokenABI,
+      client: { public: publicClient, wallet: signer },
+    });
 
     if (CONFIG.batchJsonFile) {
       const fs = await import("fs");
       const config = JSON.parse(fs.readFileSync(CONFIG.batchJsonFile, "utf-8"));
 
       console.log(
-        `🔄 Batch minting ${config.recipients.length} membership tokens...`
+        `🔄 Batch minting ${config.recipients.length} membership tokens...`,
       );
 
       // Type-safe contract call with autocomplete for method name and params
-      const tx = await membership.adminBatchMintMemberships(
+      const txHash = await membership.write.adminBatchMintMemberships([
         config.recipients,
         config.tiers,
-        config.metadataURIs
-      );
-
-      const receipt = await tx.wait();
+        config.metadataURIs,
+      ]);
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+      });
       console.log(`✅ Batch mint successful!`);
-      console.log(`   Transaction: ${receipt?.transactionHash}`);
+      console.log(`   Transaction: ${receipt.transactionHash}`);
     } else {
       if (!CONFIG.recipient || !CONFIG.tier || !CONFIG.metadataURI) {
         console.error("❌ Missing required configuration for single mint");
@@ -64,15 +55,17 @@ async function mintMembershipToken() {
       console.log(`   Tier: ${CONFIG.tier}`);
 
       // Type-safe call - TypeScript knows this method exists and its parameter types
-      const tx = await membership.adminMintMembership(
-        CONFIG.recipient,
+      const txHash = await membership.write.adminMintMembership([
+        CONFIG.recipient as `0x${string}`,
         CONFIG.tier,
-        CONFIG.metadataURI
-      );
-      const receipt = await tx.wait();
-
+        CONFIG.metadataURI,
+      ]);
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+      });
       console.log(`✅ Mint successful!`);
-      console.log(`   Transaction: ${receipt?.transactionHash}`);
+      console.log(`   Transaction: ${receipt.transactionHash}`);
+      console.log(`   Block: ${receipt.blockNumber}`);
     }
   } catch (error) {
     console.error("❌ Mint failed:", error);

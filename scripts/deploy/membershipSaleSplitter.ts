@@ -1,4 +1,5 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+import { formatEther, isAddress } from "viem";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -14,28 +15,33 @@ dotenv.config();
 async function main() {
   console.log("🚀 Deploying MembershipSaleSplitter...");
 
-  const [deployer] = await ethers.getSigners();
-  console.log("Deploying with account:", deployer.address);
+  const connection = await hre.network.create();
+  const [deployer] = await connection.viem.getWalletClients();
+  const publicClient = await connection.viem.getPublicClient();
 
-  // Get account balance
-  const balance = await ethers.provider.getBalance(deployer.address);
-  console.log("Account balance:", ethers.formatEther(balance), "ETH");
+  console.log("Deploying with account:", deployer.account.address);
+
+  const balance = await publicClient.getBalance({
+    address: deployer.account.address,
+  });
+  console.log("Account balance:", formatEther(balance), "ETH");
 
   // Configuration
-  const treasuryOps = process.env.TREASURY_OPS_ADDRESS || deployer.address;
-  const liquidityReceiver =
-    process.env.LIQUIDITY_RECEIVER_ADDRESS || deployer.address;
+  const treasuryOps = (process.env.TREASURY_OPS_ADDRESS ||
+    deployer.account.address) as `0x${string}`;
+  const liquidityReceiver = (process.env.LIQUIDITY_RECEIVER_ADDRESS ||
+    deployer.account.address) as `0x${string}`;
 
   if (
     process.env.TREASURY_OPS_ADDRESS &&
-    !ethers.isAddress(process.env.TREASURY_OPS_ADDRESS)
+    !isAddress(process.env.TREASURY_OPS_ADDRESS)
   ) {
     console.error("❌ TREASURY_OPS_ADDRESS is not a valid Ethereum address");
     process.exit(1);
   }
   if (
     process.env.LIQUIDITY_RECEIVER_ADDRESS &&
-    !ethers.isAddress(process.env.LIQUIDITY_RECEIVER_ADDRESS)
+    !isAddress(process.env.LIQUIDITY_RECEIVER_ADDRESS)
   ) {
     console.error(
       "❌ LIQUIDITY_RECEIVER_ADDRESS is not a valid Ethereum address",
@@ -49,13 +55,12 @@ async function main() {
   console.log("\n⚠️  IMPORTANT: This split is IMMUTABLE after deployment!");
 
   // Deploy MembershipSaleSplitter
-  const SplitterFactory = await ethers.getContractFactory(
+  const splitter = await connection.viem.deployContract(
     "MembershipSaleSplitter",
+    [treasuryOps, liquidityReceiver],
   );
-  const splitter = await SplitterFactory.deploy(treasuryOps, liquidityReceiver);
-  await splitter.waitForDeployment();
 
-  const splitterAddress = await splitter.getAddress();
+  const splitterAddress = splitter.address;
   console.log("\n✅ MembershipSaleSplitter deployed to:", splitterAddress);
 
   console.log("\n=== Deployment Complete ===");

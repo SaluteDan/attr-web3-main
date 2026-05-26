@@ -1,6 +1,6 @@
 {
   "name": "attr-web3",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "private": false,
   "description": "ATTR smart contracts, deployment scripts, and contract verification workers.",
   "main": "dist/src/index.js",

@@ -1,12 +1,13 @@
 import { HardhatUserConfig } from "hardhat/config";
-import "@nomicfoundation/hardhat-viem";
-import "@nomicfoundation/hardhat-verify";
+import hardhatViem from "@nomicfoundation/hardhat-viem";
+import hardhatVerify from "@nomicfoundation/hardhat-verify";
 // import "solidity-coverage"; // Temporarily disabled - not yet compatible with Hardhat v3
 import * as dotenv from "dotenv";
 
 dotenv.config();
 
 const config: HardhatUserConfig = {
+  plugins: [hardhatViem, hardhatVerify],
   solidity: {
     version: "0.8.26",
     settings: {
@@ -18,7 +19,6 @@ const config: HardhatUserConfig = {
       evmVersion: "cancun",
     },
   },
-  defaultNetwork: "baseSepolia",
   networks: {
     baseSepolia: {
       type: "http",
@@ -41,10 +41,7 @@ const config: HardhatUserConfig = {
   },
   verify: {
     etherscan: {
-      apiKey: {
-        baseSepolia: process.env.BASESCAN_API_KEY || "",
-        base: process.env.BASESCAN_API_KEY || "",
-      },
+      apiKey: process.env.BASESCAN_API_KEY || "",
     },
   },
 };

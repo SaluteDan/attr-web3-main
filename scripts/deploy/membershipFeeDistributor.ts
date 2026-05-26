@@ -1,4 +1,5 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+import { formatEther, isAddress } from "viem";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -17,12 +18,16 @@ dotenv.config();
 async function main() {
   console.log("🚀 Deploying MembershipFeeDistributor...");
 
-  const [deployer] = await ethers.getSigners();
-  console.log("Deploying with account:", deployer.address);
+  const connection = await hre.network.create();
+  const [deployer] = await connection.viem.getWalletClients();
+  const publicClient = await connection.viem.getPublicClient();
 
-  // Get account balance
-  const balance = await ethers.provider.getBalance(deployer.address);
-  console.log("Account balance:", ethers.formatEther(balance), "ETH");
+  console.log("Deploying with account:", deployer.account.address);
+
+  const balance = await publicClient.getBalance({
+    address: deployer.account.address,
+  });
+  console.log("Account balance:", formatEther(balance), "ETH");
 
   // Configuration
   // Validate membershipTokenAddress format
@@ -34,15 +39,15 @@ async function main() {
     );
     process.exit(1);
   }
-  if (!ethers.isAddress(membershipTokenAddress)) {
+  if (!isAddress(membershipTokenAddress)) {
     console.error(
       "❌ MEMBERSHIP_TOKEN_ADDRESS is not a valid Ethereum address",
     );
     process.exit(1);
   }
 
-  // DAO multisig controls deposits and snapshot updates
-  const daoOwner = process.env.DAO_MULTISIG_ADDRESS || deployer.address;
+  const daoOwner = (process.env.DAO_MULTISIG_ADDRESS ||
+    deployer.account.address) as `0x${string}`;
 
   console.log("\n📋 Deployment Parameters:");
   console.log(`   Membership Token: ${membershipTokenAddress}`);
@@ -53,16 +58,12 @@ async function main() {
   console.log("   Deposits are blocked until snapshot is set.");
 
   // Deploy MembershipFeeDistributor
-  const DistributorFactory = await ethers.getContractFactory(
+  const distributor = await connection.viem.deployContract(
     "MembershipFeeDistributor",
+    [membershipTokenAddress as `0x${string}`, daoOwner],
   );
-  const distributor = await DistributorFactory.deploy(
-    membershipTokenAddress,
-    daoOwner,
-  );
-  await distributor.waitForDeployment();
 
-  const distributorAddress = await distributor.getAddress();
+  const distributorAddress = distributor.address;
   console.log("\n✅ MembershipFeeDistributor deployed to:", distributorAddress);
 
   console.log("\n=== Deployment Complete ===");

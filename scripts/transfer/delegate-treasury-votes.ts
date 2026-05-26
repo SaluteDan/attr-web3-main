@@ -1,5 +1,7 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+import { getContract, formatEther } from "viem";
 import * as dotenv from "dotenv";
+import { ATTRTokenABI } from "../../src/index.js";
 
 dotenv.config();
 
@@ -27,54 +29,59 @@ async function main() {
     throw new Error("ATTR_TOKEN_ADDRESS not set in .env");
   }
 
-  // This script should be run with the treasury wallet as the signer
-  const [treasury] = await ethers.getSigners();
-  console.log("Treasury Address:", treasury.address);
+  const connection = await hre.network.create();
+  const [treasury] = await connection.viem.getWalletClients();
+  const publicClient = await connection.viem.getPublicClient();
+
+  console.log("Treasury Address:", treasury.account.address);
   console.log("Token Address:", TOKEN_ADDRESS);
 
-  const token = await ethers.getContractAt("ATTRToken", TOKEN_ADDRESS);
+  const token = getContract({
+    address: TOKEN_ADDRESS as `0x${string}`,
+    abi: ATTRTokenABI,
+    client: { public: publicClient, wallet: treasury },
+  });
 
-  // Check current state
-  const balance = await token.balanceOf(treasury.address);
-  const currentDelegate = await token.delegates(treasury.address);
-  const currentVotes = await token.getVotes(treasury.address);
+  const balance = await token.read.balanceOf([treasury.account.address]);
+  const currentDelegate = await token.read.delegates([
+    treasury.account.address,
+  ]);
+  const currentVotes = await token.read.getVotes([treasury.account.address]);
 
   console.log("\n=== Current State ===");
-  console.log("Treasury Balance:", ethers.formatEther(balance), "ATTR");
+  console.log("Treasury Balance:", formatEther(balance as bigint), "ATTR");
   console.log("Current Delegate:", currentDelegate);
   console.log(
     "Current Voting Power:",
-    ethers.formatEther(currentVotes),
+    formatEther(currentVotes as bigint),
     "ATTR",
   );
 
-  if (currentDelegate === treasury.address) {
+  if (currentDelegate === treasury.account.address) {
     console.log("\n✅ Treasury is already self-delegated.");
     console.log(
       "Voting power is active:",
-      ethers.formatEther(currentVotes),
+      formatEther(currentVotes as bigint),
       "ATTR",
     );
     return;
   }
 
-  // Self-delegate
   console.log("\n🔄 Delegating voting power to self...");
-  const tx = await token.delegate(treasury.address);
-  console.log("Transaction submitted:", tx.hash);
+  const txHash = await token.write.delegate([treasury.account.address]);
+  console.log("Transaction submitted:", txHash);
 
-  await tx.wait();
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
   console.log("✅ Transaction confirmed");
 
-  // Verify
-  const newDelegate = await token.delegates(treasury.address);
-  const newVotes = await token.getVotes(treasury.address);
+  const newDelegate = await token.read.delegates([treasury.account.address]);
+  const newVotes = await token.read.getVotes([treasury.account.address]);
 
   console.log("\n=== Final State ===");
   console.log("New Delegate:", newDelegate);
-  console.log("New Voting Power:", ethers.formatEther(newVotes), "ATTR");
+  console.log("New Voting Power:", formatEther(newVotes as bigint), "ATTR");
 
-  if (newDelegate === treasury.address && newVotes === balance) {
+  if (newDelegate === treasury.account.address && newVotes === balance) {
     console.log("\n🎉 Treasury voting power successfully activated!");
   } else {
     console.log("\n⚠️  WARNING: Delegation may not have completed correctly.");

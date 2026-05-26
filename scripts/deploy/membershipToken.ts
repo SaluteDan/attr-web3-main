@@ -1,4 +1,4 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -7,16 +7,17 @@ async function deployMembershipToken() {
   console.log("🚀 Deploying MembershipToken (ATTR-MEMBER-ID) contract...");
 
   try {
-    const [deployer] = await ethers.getSigners();
+    const connection = await hre.network.create();
+    const [deployer] = await connection.viem.getWalletClients();
 
     const params = {
       name: "ATTR-MEMBER-ID",
       symbol: "ATTR#",
-      initialOwner: deployer.address,
+      initialOwner: deployer.account.address,
       paymentReceiver:
-        process.env.MEMBERSHIP_PAYMENT_RECEIVER || deployer.address,
+        process.env.MEMBERSHIP_PAYMENT_RECEIVER || deployer.account.address,
       royaltyReceiver:
-        process.env.MEMBERSHIP_ROYALTY_RECEIVER || deployer.address,
+        process.env.MEMBERSHIP_ROYALTY_RECEIVER || deployer.account.address,
       royaltyFeeBps: process.env.MEMBERSHIP_ROYALTY_BPS || "500", // 5%
       contractURI:
         process.env.MEMBERSHIP_CONTRACT_URI || "ipfs://QmYourMetadataHash",
@@ -35,21 +36,19 @@ async function deployMembershipToken() {
     console.log(`   Max Mint/Wallet:   ${params.maxMintPerWallet}`);
     console.log("");
 
-    const MembershipToken = await ethers.getContractFactory("MembershipToken");
-    const membership = await MembershipToken.deploy(
+    const membership = await connection.viem.deployContract("MembershipToken", [
       params.name,
       params.symbol,
-      params.initialOwner,
-      params.paymentReceiver,
-      params.royaltyReceiver,
+      params.initialOwner as `0x${string}`,
+      params.paymentReceiver as `0x${string}`,
+      params.royaltyReceiver as `0x${string}`,
       BigInt(params.royaltyFeeBps),
       params.contractURI,
       BigInt(params.maxSupply),
       BigInt(params.maxMintPerWallet),
-    );
+    ]);
 
-    await membership.waitForDeployment();
-    const contractAddress = await membership.getAddress();
+    const contractAddress = membership.address;
     console.log("✅ MembershipToken deployed to:", contractAddress);
     console.log("");
     console.log("📝 Update your .env with:");

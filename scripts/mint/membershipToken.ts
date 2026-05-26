@@ -1,4 +1,6 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+import { getContract } from "viem";
+import { MembershipTokenABI } from "../../src/index.js";
 
 interface MintConfig {
   contractAddress: string;
@@ -24,12 +26,15 @@ async function mintMembershipToken() {
   const args = process.argv.slice(2);
 
   try {
-    const [signer] = await ethers.getSigners();
+    const connection = await hre.network.create();
+    const [signer] = await connection.viem.getWalletClients();
+    const publicClient = await connection.viem.getPublicClient();
 
-    const MembershipToken = await ethers.getContractFactory("MembershipToken");
-    const membership = MembershipToken.attach(CONFIG.contractAddress).connect(
-      signer
-    );
+    const membership = getContract({
+      address: CONFIG.contractAddress as `0x${string}`,
+      abi: MembershipTokenABI,
+      client: { public: publicClient, wallet: signer },
+    });
 
     if (CONFIG.batchJsonFile) {
       // Batch mint from JSON file
@@ -37,15 +42,16 @@ async function mintMembershipToken() {
       const config = JSON.parse(fs.readFileSync(CONFIG.batchJsonFile, "utf-8"));
 
       console.log(
-        `🔄 Batch minting ${config.recipients.length} membership tokens...`
+        `🔄 Batch minting ${config.recipients.length} membership tokens...`,
       );
-      const tx = await membership.adminBatchMintMemberships(
+      const txHash = await membership.write.adminBatchMintMemberships([
         config.recipients,
         config.tiers,
-        config.metadataURIs
-      );
-
-      const receipt = await tx.wait();
+        config.metadataURIs,
+      ]);
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+      });
       console.log(`✅ Batch mint successful!`);
       console.log(`   Transaction: ${receipt.transactionHash}`);
       console.log(`   Block: ${receipt.blockNumber}`);
@@ -62,13 +68,14 @@ async function mintMembershipToken() {
       console.log(`   Tier: ${CONFIG.tier}`);
       console.log(`   Metadata URI: ${CONFIG.metadataURI}`);
 
-      const tx = await membership.adminMintMembership(
-        CONFIG.recipient,
+      const txHash = await membership.write.adminMintMembership([
+        CONFIG.recipient as `0x${string}`,
         CONFIG.tier,
-        CONFIG.metadataURI
-      );
-      const receipt = await tx.wait();
-
+        CONFIG.metadataURI,
+      ]);
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+      });
       console.log(`✅ Mint successful!`);
       console.log(`   Transaction: ${receipt.transactionHash}`);
       console.log(`   Block: ${receipt.blockNumber}`);

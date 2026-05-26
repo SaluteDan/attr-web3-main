@@ -1,5 +1,14 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+import {
+  isAddress,
+  getAddress,
+  getContract,
+  keccak256,
+  toBytes,
+  zeroHash,
+} from "viem";
 import * as dotenv from "dotenv";
+import { ATTRTokenABI } from "../../src/index.js";
 
 dotenv.config();
 
@@ -43,19 +52,17 @@ async function main() {
     throw new Error("RELAYER_ADDRESS not set in .env");
   }
 
-  // Validate address formats
-  if (!ethers.isAddress(TOKEN_ADDRESS)) {
+  if (!isAddress(TOKEN_ADDRESS)) {
     throw new Error("ATTR_TOKEN_ADDRESS is not a valid Ethereum address");
   }
-  if (!ethers.isAddress(GNOSIS_SAFE)) {
+  if (!isAddress(GNOSIS_SAFE)) {
     throw new Error("GNOSIS_SAFE_ADDRESS is not a valid Ethereum address");
   }
-  if (!ethers.isAddress(RELAYER)) {
+  if (!isAddress(RELAYER)) {
     throw new Error("RELAYER_ADDRESS is not a valid Ethereum address");
   }
-  // Normalize addresses for consistent comparison
-  const normalizedSafe = ethers.getAddress(GNOSIS_SAFE);
-  const normalizedRelayer = ethers.getAddress(RELAYER);
+  const normalizedSafe = getAddress(GNOSIS_SAFE);
+  const normalizedRelayer = getAddress(RELAYER);
 
   // Validate addresses are unique
   if (normalizedSafe === normalizedRelayer) {
@@ -64,41 +71,46 @@ async function main() {
     );
   }
 
-  const [deployer] = await ethers.getSigners();
+  const connection = await hre.network.create();
+  const [deployer] = await connection.viem.getWalletClients();
+  const publicClient = await connection.viem.getPublicClient();
 
-  // Validate targets are not the deployer
   if (
-    normalizedSafe === deployer.address ||
-    normalizedRelayer === deployer.address
+    normalizedSafe === deployer.account.address ||
+    normalizedRelayer === deployer.account.address
   ) {
     throw new Error("Target addresses cannot be the deployer address");
   }
 
-  console.log("Executing from deployer:", deployer.address);
+  console.log("Executing from deployer:", deployer.account.address);
   console.log("Token Address:", TOKEN_ADDRESS);
   console.log("Gnosis Safe (new admin):", GNOSIS_SAFE);
   console.log("Relayer (new minter):", RELAYER);
 
-  // Connect to deployed token
-  const token = await ethers.getContractAt("ATTRToken", TOKEN_ADDRESS);
+  const token = getContract({
+    address: TOKEN_ADDRESS as `0x${string}`,
+    abi: ATTRTokenABI,
+    client: { public: publicClient, wallet: deployer },
+  });
 
-  // Role identifiers
-  const DEFAULT_ADMIN_ROLE = ethers.ZeroHash;
-  const MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"));
+  const DEFAULT_ADMIN_ROLE = zeroHash;
+  const MINTER_ROLE = keccak256(toBytes("MINTER_ROLE"));
 
   // Verify deployer has admin role
-  const hasAdminRole = await token.hasRole(
+  const hasAdminRole = await token.read.hasRole([
     DEFAULT_ADMIN_ROLE,
-    deployer.address,
-  );
+    deployer.account.address,
+  ]);
   if (!hasAdminRole) {
     throw new Error(
       "Deployer does not have DEFAULT_ADMIN_ROLE. Cannot proceed.",
     );
   }
 
-  // Verify deployer has minter role
-  const hasMinterRole = await token.hasRole(MINTER_ROLE, deployer.address);
+  const hasMinterRole = await token.read.hasRole([
+    MINTER_ROLE,
+    deployer.account.address,
+  ]);
   if (!hasMinterRole) {
     throw new Error("Deployer does not have MINTER_ROLE. Cannot proceed.");
   }
@@ -114,7 +126,8 @@ async function main() {
 
   // For non-interactive environments, set SKIP_CONFIRMATION=true
   if (process.env.SKIP_CONFIRMATION !== "true") {
-    const readline = require("readline").createInterface({
+    const { createInterface } = await import("readline");
+    const readline = createInterface({
       input: process.stdin,
       output: process.stdout,
     });
@@ -133,39 +146,50 @@ async function main() {
 
   console.log("\n🚀 Starting role transfer...\n");
 
-  // Step 1: Grant DEFAULT_ADMIN_ROLE to Gnosis Safe
   console.log("Step 1/4: Granting DEFAULT_ADMIN_ROLE to Gnosis Safe...");
-  const tx1 = await token.grantRole(DEFAULT_ADMIN_ROLE, GNOSIS_SAFE);
-  await tx1.wait();
-  console.log("✅ Admin role granted to Safe. Tx:", tx1.hash);
+  const tx1 = await token.write.grantRole([DEFAULT_ADMIN_ROLE, normalizedSafe]);
+  await publicClient.waitForTransactionReceipt({ hash: tx1 });
+  console.log("✅ Admin role granted to Safe. Tx:", tx1);
 
-  // Step 2: Grant MINTER_ROLE to Relayer
   console.log("\nStep 2/4: Granting MINTER_ROLE to Relayer...");
-  const tx2 = await token.grantRole(MINTER_ROLE, RELAYER);
-  await tx2.wait();
-  console.log("✅ Minter role granted to Relayer. Tx:", tx2.hash);
+  const tx2 = await token.write.grantRole([MINTER_ROLE, normalizedRelayer]);
+  await publicClient.waitForTransactionReceipt({ hash: tx2 });
+  console.log("✅ Minter role granted to Relayer. Tx:", tx2);
 
-  // Step 3: Revoke DEFAULT_ADMIN_ROLE from Deployer
   console.log("\nStep 3/4: Revoking DEFAULT_ADMIN_ROLE from Deployer...");
-  const tx3 = await token.revokeRole(DEFAULT_ADMIN_ROLE, deployer.address);
-  await tx3.wait();
-  console.log("✅ Admin role revoked from Deployer. Tx:", tx3.hash);
+  const tx3 = await token.write.revokeRole([
+    DEFAULT_ADMIN_ROLE,
+    deployer.account.address,
+  ]);
+  await publicClient.waitForTransactionReceipt({ hash: tx3 });
+  console.log("✅ Admin role revoked from Deployer. Tx:", tx3);
 
-  // Step 4: Revoke MINTER_ROLE from Deployer
   console.log("\nStep 4/4: Revoking MINTER_ROLE from Deployer...");
-  const tx4 = await token.revokeRole(MINTER_ROLE, deployer.address);
-  await tx4.wait();
-  console.log("✅ Minter role revoked from Deployer. Tx:", tx4.hash);
+  const tx4 = await token.write.revokeRole([
+    MINTER_ROLE,
+    deployer.account.address,
+  ]);
+  await publicClient.waitForTransactionReceipt({ hash: tx4 });
+  console.log("✅ Minter role revoked from Deployer. Tx:", tx4);
 
   // Final verification
   console.log("\n=== Final Role Verification ===");
-  const safeHasAdmin = await token.hasRole(DEFAULT_ADMIN_ROLE, GNOSIS_SAFE);
-  const relayerHasMinter = await token.hasRole(MINTER_ROLE, RELAYER);
-  const deployerHasAdmin = await token.hasRole(
+  const safeHasAdmin = await token.read.hasRole([
     DEFAULT_ADMIN_ROLE,
-    deployer.address,
-  );
-  const deployerHasMinter = await token.hasRole(MINTER_ROLE, deployer.address);
+    normalizedSafe,
+  ]);
+  const relayerHasMinter = await token.read.hasRole([
+    MINTER_ROLE,
+    normalizedRelayer,
+  ]);
+  const deployerHasAdmin = await token.read.hasRole([
+    DEFAULT_ADMIN_ROLE,
+    deployer.account.address,
+  ]);
+  const deployerHasMinter = await token.read.hasRole([
+    MINTER_ROLE,
+    deployer.account.address,
+  ]);
 
   console.log(
     "Gnosis Safe has DEFAULT_ADMIN_ROLE:",

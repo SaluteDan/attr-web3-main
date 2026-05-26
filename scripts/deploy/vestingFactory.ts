@@ -1,5 +1,6 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
 import * as dotenv from "dotenv";
+import { isAddress } from "viem";
 
 dotenv.config();
 
@@ -10,21 +11,27 @@ dotenv.config();
 async function main() {
   console.log("Deploying VestingLockCampaignFactory...");
 
-  const [deployer] = await ethers.getSigners();
-  const initialOwner =
-    process.env.VESTING_FACTORY_OWNER ||
+  const connection = await hre.network.create();
+  const [deployer] = await connection.viem.getWalletClients();
+
+  const initialOwner = (process.env.VESTING_FACTORY_OWNER ||
     process.env.DAO_MULTISIG_ADDRESS ||
     process.env.PLATFORM_TREASURY_ADDRESS ||
-    deployer.address;
+    deployer.account.address) as `0x${string}`;
 
-  console.log("Deploying with account:", deployer.address);
+  if (!isAddress(initialOwner)) {
+    throw new Error(`Invalid initialOwner address: ${initialOwner}`);
+  }
+
+  console.log("Deploying with account:", deployer.account.address);
   console.log("Initial owner:", initialOwner);
 
-  const Factory = await ethers.getContractFactory("VestingLockCampaignFactory");
-  const factory = await Factory.deploy(initialOwner);
-  await factory.waitForDeployment();
+  const factory = await connection.viem.deployContract(
+    "VestingLockCampaignFactory",
+    [initialOwner],
+  );
 
-  const factoryAddress = await factory.getAddress();
+  const factoryAddress = factory.address;
   console.log("\nVestingLockCampaignFactory deployed to:", factoryAddress);
 
   console.log("\n=== Deployment Info ===");

@@ -1,6 +1,8 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+import { isAddress, getAddress, getContract } from "viem";
 import * as dotenv from "dotenv";
 import * as rl from "readline";
+import { ATTRSpenderABI } from "../../src/index.js";
 
 dotenv.config();
 
@@ -37,37 +39,39 @@ async function main() {
     throw new Error("FACTORY_CONTRACT_ADDRESS not set in .env");
   }
 
-  // Validate address formats
-  if (!ethers.isAddress(SPENDER_ADDRESS)) {
+  if (!isAddress(SPENDER_ADDRESS)) {
     throw new Error("ATTR_SPENDER_CONTRACT is not a valid Ethereum address");
   }
-  if (!ethers.isAddress(FACTORY_ADDRESS)) {
+  if (!isAddress(FACTORY_ADDRESS)) {
     throw new Error("FACTORY_CONTRACT_ADDRESS is not a valid Ethereum address");
   }
 
-  const normalizedSpender = ethers.getAddress(SPENDER_ADDRESS);
-  const normalizedFactory = ethers.getAddress(FACTORY_ADDRESS);
+  const normalizedSpender = getAddress(SPENDER_ADDRESS);
+  const normalizedFactory = getAddress(FACTORY_ADDRESS);
   if (normalizedSpender === normalizedFactory) {
     throw new Error(
       "ATTR_SPENDER_CONTRACT and FACTORY_CONTRACT_ADDRESS cannot be the same address",
     );
   }
 
-  const [deployer] = await ethers.getSigners();
+  const connection = await hre.network.create();
+  const [deployer] = await connection.viem.getWalletClients();
+  const publicClient = await connection.viem.getPublicClient();
 
-  console.log("Executing from account:", deployer.address);
+  console.log("Executing from account:", deployer.account.address);
   console.log("ATTRSpender Address:", normalizedSpender);
   console.log("New Owner (Factory):", normalizedFactory);
 
-  // Connect to ATTRSpender using TypeChain-generated factory
-  const { ATTRSpender__factory } = await import("../../src/index");
-  const spender = ATTRSpender__factory.connect(normalizedSpender, deployer);
+  const spender = getContract({
+    address: normalizedSpender,
+    abi: ATTRSpenderABI,
+    client: { public: publicClient, wallet: deployer },
+  });
 
-  // Verify current owner
-  const currentOwner = await spender.owner();
+  const currentOwner = await spender.read.owner();
   console.log("\nCurrent Owner:", currentOwner);
 
-  if (currentOwner !== deployer.address) {
+  if (currentOwner !== deployer.account.address) {
     throw new Error(
       `Deployer is not the current owner. Current owner: ${currentOwner}`,
     );
@@ -108,14 +112,12 @@ async function main() {
 
   console.log("\n🚀 Transferring ownership to factory...");
 
-  // Execute ownership transfer
-  const tx = await spender.transferOwnership(normalizedFactory);
-  await tx.wait();
-  console.log("✅ Ownership transfer complete. Tx:", tx.hash);
+  const txHash = await spender.write.transferOwnership([normalizedFactory]);
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  console.log("✅ Ownership transfer complete. Tx:", txHash);
 
-  // Verify the transfer
   console.log("\n=== Ownership Verification ===");
-  const newOwner = await spender.owner();
+  const newOwner = await spender.read.owner();
   console.log("New Owner:", newOwner);
 
   if (newOwner === normalizedFactory) {

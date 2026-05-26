@@ -1,4 +1,5 @@
-import { ethers } from "hardhat";
+import hre from "hardhat";
+import { formatEther } from "viem";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -14,14 +15,17 @@ dotenv.config();
 async function main() {
   console.log("🚀 Deploying ATTRSpender...");
 
-  const [deployer] = await ethers.getSigners();
-  console.log("Deploying with account:", deployer.address);
+  const connection = await hre.network.create();
+  const [deployer] = await connection.viem.getWalletClients();
+  const publicClient = await connection.viem.getPublicClient();
 
-  // Get account balance
-  const balance = await ethers.provider.getBalance(deployer.address);
-  console.log("Account balance:", ethers.formatEther(balance), "ETH");
+  console.log("Deploying with account:", deployer.account.address);
 
-  // Configuration
+  const balance = await publicClient.getBalance({
+    address: deployer.account.address,
+  });
+  console.log("Account balance:", formatEther(balance), "ETH");
+
   const attrTokenAddress = process.env.ATTR_TOKEN_ADDRESS;
   if (!attrTokenAddress) {
     console.error("❌ ATTR_TOKEN_ADDRESS not set in .env");
@@ -31,22 +35,18 @@ async function main() {
     process.exit(1);
   }
 
-  // The deployer will be the initial owner - ownership transfers to factory after deployment
-  const initialOwner = deployer.address;
+  const initialOwner = deployer.account.address;
 
   console.log("\n📋 Deployment Parameters:");
   console.log(`   ATTR Token: ${attrTokenAddress}`);
   console.log(`   Initial Owner: ${initialOwner} (will transfer to factory)`);
 
-  // Deploy ATTRSpender
-  const ATTRSpenderFactory = await ethers.getContractFactory("ATTRSpender");
-  const attrSpender = await ATTRSpenderFactory.deploy(
-    attrTokenAddress,
+  const attrSpender = await connection.viem.deployContract("ATTRSpender", [
+    attrTokenAddress as `0x${string}`,
     initialOwner,
-  );
-  await attrSpender.waitForDeployment();
+  ]);
 
-  const spenderAddress = await attrSpender.getAddress();
+  const spenderAddress = attrSpender.address;
   console.log("\n✅ ATTRSpender deployed to:", spenderAddress);
 
   console.log("\n=== Deployment Complete ===");
