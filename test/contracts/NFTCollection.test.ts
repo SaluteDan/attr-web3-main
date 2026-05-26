@@ -1,17 +1,19 @@
+import { describe, it, beforeEach } from "node:test";
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { NFTCollection } from "../../typechain-types";
-import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
+import hre from "hardhat";
+import { parseEther, zeroAddress, getAddress } from "viem";
 import { randomUUID } from "crypto";
-import { time } from "@nomicfoundation/hardhat-network-helpers";
+
+const { viem, networkHelpers } = await hre.network.create();
 
 describe("NFTCollection", function () {
-  let nft: NFTCollection;
-  let owner: SignerWithAddress;
-  let recipient: SignerWithAddress;
-  let malicious: SignerWithAddress;
-  let paymentReceiver: SignerWithAddress;
-  let tipReceiver: SignerWithAddress;
+  let nft: Awaited<ReturnType<typeof viem.deployContract<"NFTCollection">>>;
+  let owner: Awaited<ReturnType<typeof viem.getWalletClients>>[number];
+  let recipient: typeof owner;
+  let malicious: typeof owner;
+  let paymentReceiver: typeof owner;
+  let tipReceiver: typeof owner;
+  let publicClient: Awaited<ReturnType<typeof viem.getPublicClient>>;
 
   // EIP-712 Constants
   const SIGNING_DOMAIN_NAME = "NFTCollection";
@@ -29,34 +31,32 @@ describe("NFTCollection", function () {
       { name: "creatorTip", type: "uint256" },
       { name: "deadline", type: "uint256" },
     ],
-  };
+  } as const;
 
   beforeEach(async function () {
     [owner, recipient, malicious, paymentReceiver, tipReceiver] =
-      await ethers.getSigners();
-    const network = await ethers.provider.getNetwork();
-    chainId = Number(network.chainId);
+      await viem.getWalletClients();
+    publicClient = await viem.getPublicClient();
+    chainId = await publicClient.getChainId();
 
-    const NFTContract = await ethers.getContractFactory("NFTCollection");
-    nft = await NFTContract.deploy(
+    nft = await viem.deployContract("NFTCollection", [
       "Test NFT", // name_
       "TNFT", // symbol_
-      owner.address, // initialOwner
-      owner.address, // royaltyReceiver
+      owner.account.address, // initialOwner
+      owner.account.address, // royaltyReceiver
       500, // royaltyFeeNumerator (5%)
       "ipfs://QmContractMeta", // contractURI_
-      100, // maxSupply_
-      paymentReceiver.address, // paymentReceiver_
-      10, // maxMintPerWallet_
-      paymentReceiver.address, // tipReceiver_ (same as paymentReceiver for most tests)
-      ethers.ZeroAddress, // attrSpender_ (disabled)
-    );
-    await nft.waitForDeployment();
+      100n, // maxSupply_
+      paymentReceiver.account.address, // paymentReceiver_
+      10n, // maxMintPerWallet_
+      paymentReceiver.account.address, // tipReceiver_ (same as paymentReceiver for most tests)
+      zeroAddress, // attrSpender_ (disabled)
+    ]);
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  async function makeDomain(contractAddress: string) {
+  function makeDomain(contractAddress: `0x${string}`) {
     return {
       name: SIGNING_DOMAIN_NAME,
       version: SIGNING_DOMAIN_VERSION,
@@ -66,64 +66,63 @@ describe("NFTCollection", function () {
   }
 
   async function createVoucher(
-    recipientAddr: string,
+    recipientAddr: `0x${string}`,
     uri: string,
     nonce: string = randomUUID(),
   ) {
-    const contractAddress = await nft.getAddress();
-    const latestTime = await time.latest();
-    const deadline = latestTime + 3600;
+    const latestTime = await networkHelpers.time.latest();
+    const deadline = BigInt(latestTime + 3600);
     const value = {
       recipient: recipientAddr,
       uri,
       nonce,
-      currency: ethers.ZeroAddress,
+      currency: zeroAddress,
       basePrice: 0n,
       creatorTip: 0n,
       deadline,
     };
-    const signature = await owner.signTypedData(
-      await makeDomain(contractAddress),
-      VOUCHER_TYPES,
-      value,
-    );
+    const signature = await owner.signTypedData({
+      domain: makeDomain(nft.address),
+      types: VOUCHER_TYPES,
+      primaryType: "NFTVoucher",
+      message: value,
+    });
     return { ...value, signature };
   }
 
   async function createVoucherWithDeadline(
-    recipientAddr: string,
+    recipientAddr: `0x${string}`,
     uri: string,
     deadline: number,
     nonce: string = randomUUID(),
   ) {
-    const contractAddress = await nft.getAddress();
     const value = {
       recipient: recipientAddr,
       uri,
       nonce,
-      currency: ethers.ZeroAddress,
+      currency: zeroAddress,
       basePrice: 0n,
       creatorTip: 0n,
-      deadline,
+      deadline: BigInt(deadline),
     };
-    const signature = await owner.signTypedData(
-      await makeDomain(contractAddress),
-      VOUCHER_TYPES,
-      value,
-    );
+    const signature = await owner.signTypedData({
+      domain: makeDomain(nft.address),
+      types: VOUCHER_TYPES,
+      primaryType: "NFTVoucher",
+      message: value,
+    });
     return { ...value, signature };
   }
 
   async function createVoucherWithPrice(
-    recipientAddr: string,
+    recipientAddr: `0x${string}`,
     uri: string,
-    currency: string,
+    currency: `0x${string}`,
     basePrice: bigint,
     creatorTip = 0n,
     nonce: string = randomUUID(),
   ) {
-    const contractAddress = await nft.getAddress();
-    const latestTime = await time.latest();
+    const latestTime = await networkHelpers.time.latest();
     const value = {
       recipient: recipientAddr,
       uri,
@@ -131,47 +130,45 @@ describe("NFTCollection", function () {
       currency,
       basePrice,
       creatorTip,
-      deadline: latestTime + 3600,
+      deadline: BigInt(latestTime + 3600),
     };
-    const signature = await owner.signTypedData(
-      await makeDomain(contractAddress),
-      VOUCHER_TYPES,
-      value,
-    );
+    const signature = await owner.signTypedData({
+      domain: makeDomain(nft.address),
+      types: VOUCHER_TYPES,
+      primaryType: "NFTVoucher",
+      message: value,
+    });
     return { ...value, signature };
   }
 
-  function emptyPermit(deadline: number) {
+  function emptyPermit(deadline: bigint) {
     return {
       v: 0,
-      r: "0x0000000000000000000000000000000000000000000000000000000000000000",
-      s: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      r: "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
+      s: "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`,
       deadline,
-      nonce: 0,
+      nonce: 0n,
     };
   }
 
   async function deployErc20() {
-    const ATTR = await ethers.getContractFactory("ATTRToken");
-    const token = await ATTR.deploy(
-      ethers.parseEther("1000000"),
-      ethers.parseEther("1000"),
-      owner.address,
-    );
-    await token.waitForDeployment();
-    return token;
+    return viem.deployContract("ATTRToken", [
+      parseEther("1000000"),
+      parseEther("1000"),
+      owner.account.address,
+    ]);
   }
 
   // Helper to build an ERC20 voucher using a custom contract address
   async function makeVoucherFor(
-    contractAddress: string,
-    recipientAddr: string,
-    currency: string,
+    contractAddress: `0x${string}`,
+    recipientAddr: `0x${string}`,
+    currency: `0x${string}`,
     basePrice: bigint,
     creatorTip: bigint,
     nonce: string,
   ) {
-    const latestTime = await time.latest();
+    const latestTime = await networkHelpers.time.latest();
     const value = {
       recipient: recipientAddr,
       uri: "ipfs://x",
@@ -179,18 +176,14 @@ describe("NFTCollection", function () {
       currency,
       basePrice,
       creatorTip,
-      deadline: latestTime + 3600,
+      deadline: BigInt(latestTime + 3600),
     };
-    const signature = await owner.signTypedData(
-      {
-        name: SIGNING_DOMAIN_NAME,
-        version: SIGNING_DOMAIN_VERSION,
-        chainId,
-        verifyingContract: contractAddress,
-      },
-      VOUCHER_TYPES,
-      value,
-    );
+    const signature = await owner.signTypedData({
+      domain: makeDomain(contractAddress),
+      types: VOUCHER_TYPES,
+      primaryType: "NFTVoucher",
+      message: value,
+    });
     return { ...value, signature };
   }
 
@@ -198,36 +191,40 @@ describe("NFTCollection", function () {
 
   describe("Deployment", function () {
     it("Should set correct name and symbol", async function () {
-      expect(await nft.name()).to.equal("Test NFT");
-      expect(await nft.symbol()).to.equal("TNFT");
+      expect(await nft.read.name()).to.equal("Test NFT");
+      expect(await nft.read.symbol()).to.equal("TNFT");
     });
 
     it("Should set correct owner", async function () {
-      expect(await nft.owner()).to.equal(owner.address);
+      expect(await nft.read.owner()).to.equal(
+        getAddress(owner.account.address),
+      );
     });
 
     it("Should set correct max supply", async function () {
-      expect(await nft.MAX_SUPPLY()).to.equal(100n);
+      expect(await nft.read.MAX_SUPPLY()).to.equal(100n);
     });
 
     it("Should set correct max mint per wallet", async function () {
-      expect(await nft.MAX_MINT_PER_WALLET()).to.equal(10n);
+      expect(await nft.read.MAX_MINT_PER_WALLET()).to.equal(10n);
     });
 
     it("Should set correct payment receiver", async function () {
-      expect(await nft.paymentReceiver()).to.equal(paymentReceiver.address);
+      expect(await nft.read.paymentReceiver()).to.equal(
+        getAddress(paymentReceiver.account.address),
+      );
     });
 
     it("Should return correct contractURI", async function () {
-      expect(await nft.contractURI()).to.equal("ipfs://QmContractMeta");
+      expect(await nft.read.contractURI()).to.equal("ipfs://QmContractMeta");
     });
 
     it("Should start totalSupply at 0", async function () {
-      expect(await nft.totalSupply()).to.equal(0n);
+      expect(await nft.read.totalSupply()).to.equal(0n);
     });
 
     it("Should start getNextTokenId at 1", async function () {
-      expect(await nft.getNextTokenId()).to.equal(1n);
+      expect(await nft.read.getNextTokenId()).to.equal(1n);
     });
   });
 
@@ -236,16 +233,23 @@ describe("NFTCollection", function () {
   describe("setContractURI", function () {
     it("Should allow owner to update contractURI", async function () {
       const newURI = "ipfs://QmUpdated";
-      await expect(nft.setContractURI(newURI))
-        .to.emit(nft, "ContractURIUpdated")
-        .withArgs("ipfs://QmContractMeta", newURI);
-      expect(await nft.contractURI()).to.equal(newURI);
+      await viem.assertions.emitWithArgs(
+        nft.write.setContractURI([newURI]),
+        nft,
+        "ContractURIUpdated",
+        ["ipfs://QmContractMeta", newURI],
+      );
+      expect(await nft.read.contractURI()).to.equal(newURI);
     });
 
     it("Should reject non-owner update", async function () {
-      await expect(
-        nft.connect(malicious).setContractURI("ipfs://hack"),
-      ).to.be.revertedWithCustomError(nft, "OwnableUnauthorizedAccount");
+      await viem.assertions.revertWithCustomError(
+        nft.write.setContractURI(["ipfs://hack"], {
+          account: malicious.account,
+        }),
+        nft,
+        "OwnableUnauthorizedAccount",
+      );
     });
   });
 
@@ -253,22 +257,36 @@ describe("NFTCollection", function () {
 
   describe("setTipReceiver", function () {
     it("Should allow owner to update tipReceiver", async function () {
-      await expect(nft.setTipReceiver(tipReceiver.address))
-        .to.emit(nft, "TipReceiverUpdated")
-        .withArgs(paymentReceiver.address, tipReceiver.address);
-      expect(await nft.tipReceiver()).to.equal(tipReceiver.address);
+      await viem.assertions.emitWithArgs(
+        nft.write.setTipReceiver([tipReceiver.account.address]),
+        nft,
+        "TipReceiverUpdated",
+        [
+          getAddress(paymentReceiver.account.address),
+          getAddress(tipReceiver.account.address),
+        ],
+      );
+      expect(await nft.read.tipReceiver()).to.equal(
+        getAddress(tipReceiver.account.address),
+      );
     });
 
     it("Should reject zero address", async function () {
-      await expect(
-        nft.setTipReceiver(ethers.ZeroAddress),
-      ).to.be.revertedWithCustomError(nft, "ZeroAddress");
+      await viem.assertions.revertWithCustomError(
+        nft.write.setTipReceiver([zeroAddress]),
+        nft,
+        "ZeroAddress",
+      );
     });
 
     it("Should reject non-owner update", async function () {
-      await expect(
-        nft.connect(malicious).setTipReceiver(tipReceiver.address),
-      ).to.be.revertedWithCustomError(nft, "OwnableUnauthorizedAccount");
+      await viem.assertions.revertWithCustomError(
+        nft.write.setTipReceiver([tipReceiver.account.address], {
+          account: malicious.account,
+        }),
+        nft,
+        "OwnableUnauthorizedAccount",
+      );
     });
   });
 
@@ -276,58 +294,76 @@ describe("NFTCollection", function () {
 
   describe("mintTo", function () {
     it("Should allow owner to mintTo a recipient", async function () {
-      await expect(nft.connect(owner).mintTo(recipient.address, "ipfs://QmA"))
-        .to.emit(nft, "NFTMinted")
-        .withArgs(recipient.address, 1, "ipfs://QmA");
-      expect(await nft.ownerOf(1)).to.equal(recipient.address);
-      expect(await nft.totalSupply()).to.equal(1n);
+      await viem.assertions.emitWithArgs(
+        nft.write.mintTo([recipient.account.address, "ipfs://QmA"]),
+        nft,
+        "NFTMinted",
+        [getAddress(recipient.account.address), 1n, "ipfs://QmA"],
+      );
+      expect(await nft.read.ownerOf([1n])).to.equal(
+        getAddress(recipient.account.address),
+      );
+      expect(await nft.read.totalSupply()).to.equal(1n);
     });
 
     it("Should reject mintTo from non-owner", async function () {
-      await expect(
-        nft.connect(malicious).mintTo(recipient.address, "ipfs://QmA"),
-      ).to.be.revertedWithCustomError(nft, "OwnableUnauthorizedAccount");
+      await viem.assertions.revertWithCustomError(
+        nft.write.mintTo([recipient.account.address, "ipfs://QmA"], {
+          account: malicious.account,
+        }),
+        nft,
+        "OwnableUnauthorizedAccount",
+      );
     });
 
     it("Should reject mintTo to zero address", async function () {
-      await expect(
-        nft.connect(owner).mintTo(ethers.ZeroAddress, "ipfs://QmA"),
-      ).to.be.revertedWithCustomError(nft, "ZeroAddress");
+      await viem.assertions.revertWithCustomError(
+        nft.write.mintTo([zeroAddress, "ipfs://QmA"]),
+        nft,
+        "ZeroAddress",
+      );
     });
 
     it("Should reject mintTo with empty URI", async function () {
-      await expect(
-        nft.connect(owner).mintTo(recipient.address, ""),
-      ).to.be.revertedWithCustomError(nft, "EmptyURI");
+      await viem.assertions.revertWithCustomError(
+        nft.write.mintTo([recipient.account.address, ""]),
+        nft,
+        "EmptyURI",
+      );
     });
 
     it("Should enforce max supply via mintTo", async function () {
-      const SmallNFT = await ethers.getContractFactory("NFTCollection");
-      const small = await SmallNFT.deploy(
+      const small = await viem.deployContract("NFTCollection", [
         "Small",
         "SM",
-        owner.address,
-        owner.address,
+        owner.account.address,
+        owner.account.address,
         0,
         "ipfs://",
-        2,
-        paymentReceiver.address,
-        5,
-        paymentReceiver.address,
-        ethers.ZeroAddress,
+        2n,
+        paymentReceiver.account.address,
+        5n,
+        paymentReceiver.account.address,
+        zeroAddress,
+      ]);
+      await small.write.mintTo([recipient.account.address, "ipfs://1"]);
+      await small.write.mintTo([recipient.account.address, "ipfs://2"]);
+      await viem.assertions.revertWithCustomError(
+        small.write.mintTo([recipient.account.address, "ipfs://3"]),
+        small,
+        "MaxSupplyExceeded",
       );
-      await small.mintTo(recipient.address, "ipfs://1");
-      await small.mintTo(recipient.address, "ipfs://2");
-      await expect(
-        small.mintTo(recipient.address, "ipfs://3"),
-      ).to.be.revertedWithCustomError(small, "MaxSupplyExceeded");
     });
 
     it("mintTo bypasses per-wallet counter (getMintedCount stays 0)", async function () {
-      expect(await nft.getMintedCount(recipient.address)).to.equal(0n);
-      await nft.connect(owner).mintTo(recipient.address, "ipfs://QmA");
-      expect(await nft.getMintedCount(recipient.address)).to.equal(0n);
-      expect(await nft.totalSupply()).to.equal(1n);
+      expect(
+        await nft.read.getMintedCount([recipient.account.address]),
+      ).to.equal(0n);
+      await nft.write.mintTo([recipient.account.address, "ipfs://QmA"]);
+      expect(
+        await nft.read.getMintedCount([recipient.account.address]),
+      ).to.equal(0n);
+      expect(await nft.read.totalSupply()).to.equal(1n);
     });
   });
 
@@ -335,16 +371,20 @@ describe("NFTCollection", function () {
 
   describe("setTokenURI", function () {
     it("Should allow owner to update token URI", async function () {
-      await nft.connect(owner).mintTo(recipient.address, "ipfs://QmOld");
-      await nft.connect(owner).setTokenURI(1, "ipfs://QmNew");
-      expect(await nft.tokenURI(1)).to.equal("ipfs://QmNew");
+      await nft.write.mintTo([recipient.account.address, "ipfs://QmOld"]);
+      await nft.write.setTokenURI([1n, "ipfs://QmNew"]);
+      expect(await nft.read.tokenURI([1n])).to.equal("ipfs://QmNew");
     });
 
     it("Should reject setTokenURI from non-owner", async function () {
-      await nft.connect(owner).mintTo(recipient.address, "ipfs://QmOld");
-      await expect(
-        nft.connect(malicious).setTokenURI(1, "ipfs://QmNew"),
-      ).to.be.revertedWithCustomError(nft, "OwnableUnauthorizedAccount");
+      await nft.write.mintTo([recipient.account.address, "ipfs://QmOld"]);
+      await viem.assertions.revertWithCustomError(
+        nft.write.setTokenURI([1n, "ipfs://QmNew"], {
+          account: malicious.account,
+        }),
+        nft,
+        "OwnableUnauthorizedAccount",
+      );
     });
   });
 
@@ -352,9 +392,9 @@ describe("NFTCollection", function () {
 
   describe("Royalties (ERC2981)", function () {
     it("Should return correct royalty info", async function () {
-      await nft.connect(owner).mintTo(recipient.address, "ipfs://QmA");
-      const [receiver, amount] = await nft.royaltyInfo(1, 10000n);
-      expect(receiver).to.equal(owner.address);
+      await nft.write.mintTo([recipient.account.address, "ipfs://QmA"]);
+      const [receiver, amount] = await nft.read.royaltyInfo([1n, 10000n]);
+      expect(receiver).to.equal(getAddress(owner.account.address));
       expect(amount).to.equal(500n); // 5%
     });
   });
@@ -363,10 +403,10 @@ describe("NFTCollection", function () {
 
   describe("supportsInterface", function () {
     it("Should support ERC721 interface", async function () {
-      expect(await nft.supportsInterface("0x80ac58cd")).to.be.true;
+      expect(await nft.read.supportsInterface(["0x80ac58cd"])).to.be.true;
     });
     it("Should support ERC2981 interface", async function () {
-      expect(await nft.supportsInterface("0x2a55205a")).to.be.true;
+      expect(await nft.read.supportsInterface(["0x2a55205a"])).to.be.true;
     });
   });
 
@@ -374,30 +414,40 @@ describe("NFTCollection", function () {
 
   describe("Pause / Unpause", function () {
     it("Should allow owner to pause and unpause", async function () {
-      await nft.connect(owner).pause();
-      const voucher = await createVoucher(recipient.address, "ipfs://QmA");
+      await nft.write.pause();
+      const voucher = await createVoucher(
+        recipient.account.address,
+        "ipfs://QmA",
+      );
       const permit = emptyPermit(voucher.deadline);
-      await expect(
-        nft.connect(recipient).redeem(voucher, permit),
-      ).to.be.revertedWithCustomError(nft, "EnforcedPause");
-      await nft.connect(owner).unpause();
-      await expect(nft.connect(recipient).redeem(voucher, permit)).to.emit(
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeem([voucher, permit], { account: recipient.account }),
+        nft,
+        "EnforcedPause",
+      );
+      await nft.write.unpause();
+      await viem.assertions.emit(
+        nft.write.redeem([voucher, permit], { account: recipient.account }),
         nft,
         "NFTMinted",
       );
     });
 
     it("Should reject pause from non-owner", async function () {
-      await expect(
-        nft.connect(malicious).pause(),
-      ).to.be.revertedWithCustomError(nft, "OwnableUnauthorizedAccount");
+      await viem.assertions.revertWithCustomError(
+        nft.write.pause({ account: malicious.account }),
+        nft,
+        "OwnableUnauthorizedAccount",
+      );
     });
 
     it("Should reject mintTo while paused", async function () {
-      await nft.connect(owner).pause();
-      await expect(
-        nft.connect(owner).mintTo(recipient.address, "ipfs://QmA"),
-      ).to.be.revertedWithCustomError(nft, "EnforcedPause");
+      await nft.write.pause();
+      await viem.assertions.revertWithCustomError(
+        nft.write.mintTo([recipient.account.address, "ipfs://QmA"]),
+        nft,
+        "EnforcedPause",
+      );
     });
   });
 
@@ -405,17 +455,24 @@ describe("NFTCollection", function () {
 
   describe("View helpers", function () {
     it("Should increment totalSupply and getNextTokenId after mints", async function () {
-      await nft.connect(owner).mintTo(recipient.address, "ipfs://1");
-      await nft.connect(owner).mintTo(recipient.address, "ipfs://2");
-      expect(await nft.totalSupply()).to.equal(2n);
-      expect(await nft.getNextTokenId()).to.equal(3n);
+      await nft.write.mintTo([recipient.account.address, "ipfs://1"]);
+      await nft.write.mintTo([recipient.account.address, "ipfs://2"]);
+      expect(await nft.read.totalSupply()).to.equal(2n);
+      expect(await nft.read.getNextTokenId()).to.equal(3n);
     });
 
     it("Should track getMintedCount per wallet for voucher mints", async function () {
-      const voucher = await createVoucher(recipient.address, "ipfs://QmA");
+      const voucher = await createVoucher(
+        recipient.account.address,
+        "ipfs://QmA",
+      );
       const permit = emptyPermit(voucher.deadline);
-      await nft.connect(recipient).redeem(voucher, permit);
-      expect(await nft.getMintedCount(recipient.address)).to.equal(1n);
+      await nft.write.redeem([voucher, permit], {
+        account: recipient.account,
+      });
+      expect(
+        await nft.read.getMintedCount([recipient.account.address]),
+      ).to.equal(1n);
     });
   });
 
@@ -424,273 +481,331 @@ describe("NFTCollection", function () {
   describe("redeem", function () {
     it("Should mint an NFT with a valid voucher and permit", async function () {
       const uri = "ipfs://QmTest";
-      const voucher = await createVoucher(recipient.address, uri);
+      const voucher = await createVoucher(recipient.account.address, uri);
       const permit = emptyPermit(voucher.deadline);
 
-      await expect(nft.connect(recipient).redeem(voucher, permit))
-        .to.emit(nft, "NFTMinted")
-        .withArgs(recipient.address, 1, uri);
+      await viem.assertions.emitWithArgs(
+        nft.write.redeem([voucher, permit], { account: recipient.account }),
+        nft,
+        "NFTMinted",
+        [getAddress(recipient.account.address), 1n, uri],
+      );
 
-      expect(await nft.ownerOf(1)).to.equal(recipient.address);
-      expect(await nft.tokenURI(1)).to.equal(uri);
+      expect(await nft.read.ownerOf([1n])).to.equal(
+        getAddress(recipient.account.address),
+      );
+      expect(await nft.read.tokenURI([1n])).to.equal(uri);
     });
 
     it("Should fail if the voucher is modified", async function () {
-      const voucher = await createVoucher(recipient.address, "ipfs://QmTest");
+      const voucher = await createVoucher(
+        recipient.account.address,
+        "ipfs://QmTest",
+      );
       const forgedVoucher = { ...voucher, uri: "ipfs://QmHacked" };
       const permit = emptyPermit(voucher.deadline);
 
-      await expect(
-        nft.connect(recipient).redeem(forgedVoucher, permit),
-      ).to.be.revertedWithCustomError(nft, "InvalidSignature");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeem([forgedVoucher, permit], {
+          account: recipient.account,
+        }),
+        nft,
+        "InvalidSignature",
+      );
     });
 
     it("Should fail if the signature is from a non-owner", async function () {
-      const contractAddress = await nft.getAddress();
-      const latestTime = await time.latest();
+      const latestTime = await networkHelpers.time.latest();
       const nonce = randomUUID();
       const value = {
-        recipient: recipient.address,
+        recipient: recipient.account.address,
         uri: "ipfs://QmTest",
         nonce,
-        currency: ethers.ZeroAddress,
+        currency: zeroAddress,
         basePrice: 0n,
         creatorTip: 0n,
-        deadline: latestTime + 3600,
+        deadline: BigInt(latestTime + 3600),
       };
-      const signature = await malicious.signTypedData(
-        await makeDomain(contractAddress),
-        VOUCHER_TYPES,
-        value,
-      );
+      const signature = await malicious.signTypedData({
+        domain: makeDomain(nft.address),
+        types: VOUCHER_TYPES,
+        primaryType: "NFTVoucher",
+        message: value,
+      });
       const voucher = { ...value, signature };
       const permit = emptyPermit(value.deadline);
 
-      await expect(
-        nft.connect(recipient).redeem(voucher, permit),
-      ).to.be.revertedWithCustomError(nft, "InvalidSignature");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeem([voucher, permit], { account: recipient.account }),
+        nft,
+        "InvalidSignature",
+      );
     });
 
     it("Should prevent replay attacks (using the same voucher twice)", async function () {
-      const voucher = await createVoucher(recipient.address, "ipfs://QmTest");
+      const voucher = await createVoucher(
+        recipient.account.address,
+        "ipfs://QmTest",
+      );
       const permit = emptyPermit(voucher.deadline);
 
-      await nft.connect(recipient).redeem(voucher, permit);
+      await nft.write.redeem([voucher, permit], {
+        account: recipient.account,
+      });
 
-      await expect(
-        nft.connect(recipient).redeem(voucher, permit),
-      ).to.be.revertedWithCustomError(nft, "VoucherAlreadyUsed");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeem([voucher, permit], { account: recipient.account }),
+        nft,
+        "VoucherAlreadyUsed",
+      );
     });
 
     it("Should allow minting by any caller with a valid voucher", async function () {
       const uri = "ipfs://QmTest";
-      const voucher = await createVoucher(recipient.address, uri);
+      const voucher = await createVoucher(recipient.account.address, uri);
       const permit = emptyPermit(voucher.deadline);
 
-      await expect(nft.connect(malicious).redeem(voucher, permit))
-        .to.emit(nft, "NFTMinted")
-        .withArgs(recipient.address, 1, uri);
+      await viem.assertions.emitWithArgs(
+        nft.write.redeem([voucher, permit], { account: malicious.account }),
+        nft,
+        "NFTMinted",
+        [getAddress(recipient.account.address), 1n, uri],
+      );
 
-      expect(await nft.ownerOf(1)).to.equal(recipient.address);
+      expect(await nft.read.ownerOf([1n])).to.equal(
+        getAddress(recipient.account.address),
+      );
     });
 
     it("Should reject expired voucher", async function () {
-      const latestTime = await time.latest();
+      const latestTime = await networkHelpers.time.latest();
       const voucher = await createVoucherWithDeadline(
-        recipient.address,
+        recipient.account.address,
         "ipfs://QmA",
         latestTime - 1,
       );
       const permit = emptyPermit(voucher.deadline);
-      await expect(
-        nft.connect(recipient).redeem(voucher, permit),
-      ).to.be.revertedWithCustomError(nft, "VoucherExpired");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeem([voucher, permit], { account: recipient.account }),
+        nft,
+        "VoucherExpired",
+      );
     });
 
     it("Should enforce max mint per wallet", async function () {
-      const SmallNFT = await ethers.getContractFactory("NFTCollection");
-      const small = await SmallNFT.deploy(
+      const small = await viem.deployContract("NFTCollection", [
         "Small",
         "SM",
-        owner.address,
-        owner.address,
+        owner.account.address,
+        owner.account.address,
         0,
         "ipfs://",
-        1000,
-        paymentReceiver.address,
-        2,
-        paymentReceiver.address,
-        ethers.ZeroAddress,
+        1000n,
+        paymentReceiver.account.address,
+        2n,
+        paymentReceiver.account.address,
+        zeroAddress,
+      ]);
+      const contractAddr = small.address;
+      const latestTime = await networkHelpers.time.latest();
+      const permit = emptyPermit(BigInt(latestTime + 3600));
+      const makeV = async (n: string) => {
+        const value = {
+          recipient: recipient.account.address,
+          uri: "ipfs://x",
+          nonce: n,
+          currency: zeroAddress,
+          basePrice: 0n,
+          creatorTip: 0n,
+          deadline: BigInt(latestTime + 3600),
+        };
+        const signature = await owner.signTypedData({
+          domain: makeDomain(contractAddr),
+          types: VOUCHER_TYPES,
+          primaryType: "NFTVoucher",
+          message: value,
+        });
+        return { ...value, signature };
+      };
+      await small.write.redeem([await makeV("n1"), permit], {
+        account: recipient.account,
+      });
+      await small.write.redeem([await makeV("n2"), permit], {
+        account: recipient.account,
+      });
+      await viem.assertions.revertWithCustomError(
+        small.write.redeem([await makeV("n3"), permit], {
+          account: recipient.account,
+        }),
+        small,
+        "MaxMintPerWalletExceeded",
       );
-      const contractAddr = await small.getAddress();
-      const latestTime = await time.latest();
-      const permit = emptyPermit(latestTime + 3600);
-      const makeV = async (n: string) =>
-        makeVoucherFor(
-          contractAddr,
-          recipient.address,
-          ethers.ZeroAddress,
-          0n,
-          0n,
-          n,
-        );
-      await small.connect(recipient).redeem(await makeV("n1"), permit);
-      await small.connect(recipient).redeem(await makeV("n2"), permit);
-      await expect(
-        small.connect(recipient).redeem(await makeV("n3"), permit),
-      ).to.be.revertedWithCustomError(small, "MaxMintPerWalletExceeded");
     });
 
     it("Should mint with ETH payment and forward basePrice to paymentReceiver", async function () {
-      const price = ethers.parseEther("0.1");
+      const price = parseEther("0.1");
       const voucher = await createVoucherWithPrice(
-        recipient.address,
+        recipient.account.address,
         "ipfs://QmEth",
-        ethers.ZeroAddress,
+        zeroAddress,
         price,
       );
       const permit = emptyPermit(voucher.deadline);
 
-      const before = await ethers.provider.getBalance(paymentReceiver.address);
-      await nft.connect(recipient).redeem(voucher, permit, { value: price });
-      const after = await ethers.provider.getBalance(paymentReceiver.address);
+      const before = await publicClient.getBalance({
+        address: paymentReceiver.account.address,
+      });
+      await nft.write.redeem([voucher, permit], {
+        account: recipient.account,
+        value: price,
+      });
+      const after = await publicClient.getBalance({
+        address: paymentReceiver.account.address,
+      });
       expect(after - before).to.equal(price);
     });
 
     it("Should reject non-exact ETH for paid voucher", async function () {
-      const price = ethers.parseEther("0.1");
+      const price = parseEther("0.1");
       const voucher = await createVoucherWithPrice(
-        recipient.address,
+        recipient.account.address,
         "ipfs://QmEth",
-        ethers.ZeroAddress,
+        zeroAddress,
         price,
       );
       const permit = emptyPermit(voucher.deadline);
-      await expect(
-        nft
-          .connect(recipient)
-          .redeem(voucher, permit, { value: ethers.parseEther("0.05") }),
-      ).to.be.revertedWithCustomError(nft, "ExactETHRequired");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeem([voucher, permit], {
+          account: recipient.account,
+          value: parseEther("0.05"),
+        }),
+        nft,
+        "ExactETHRequired",
+      );
     });
 
     it("Should reject ETH sent alongside ERC20 voucher", async function () {
       const token = await deployErc20();
-      const price = ethers.parseEther("10");
-      const tokenAddr = await token.getAddress();
-      await token.transfer(recipient.address, price);
-      await token.connect(recipient).approve(await nft.getAddress(), price);
+      const price = parseEther("10");
+      await token.write.transfer([recipient.account.address, price]);
+      await token.write.approve([nft.address, price], {
+        account: recipient.account,
+      });
       const voucher = await createVoucherWithPrice(
-        recipient.address,
+        recipient.account.address,
         "ipfs://QmERC",
-        tokenAddr,
+        token.address,
         price,
       );
       const permit = emptyPermit(voucher.deadline);
-      await expect(
-        nft
-          .connect(recipient)
-          .redeem(voucher, permit, { value: ethers.parseEther("0.01") }),
-      ).to.be.revertedWithCustomError(nft, "ETHWithERC20Payment");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeem([voucher, permit], {
+          account: recipient.account,
+          value: parseEther("0.01"),
+        }),
+        nft,
+        "ETHWithERC20Payment",
+      );
     });
   });
 
   // ─── base + tip routing ────────────────────────────────────────────────────
 
   describe("base + tip routing", function () {
-    let tipNft: NFTCollection;
+    let tipNft: typeof nft;
 
     beforeEach(async function () {
-      const NFTContract = await ethers.getContractFactory("NFTCollection");
-      tipNft = await NFTContract.deploy(
+      tipNft = await viem.deployContract("NFTCollection", [
         "Tip NFT",
         "TNFT2",
-        owner.address,
-        owner.address,
+        owner.account.address,
+        owner.account.address,
         0,
         "ipfs://",
-        100,
-        paymentReceiver.address,
-        10,
-        tipReceiver.address, // separate tipReceiver
-        ethers.ZeroAddress,
-      );
-      await tipNft.waitForDeployment();
+        100n,
+        paymentReceiver.account.address,
+        10n,
+        tipReceiver.account.address, // separate tipReceiver
+        zeroAddress,
+      ]);
     });
 
     it("Should split ETH: basePrice → paymentReceiver, creatorTip → tipReceiver", async function () {
-      const base = ethers.parseEther("0.1");
-      const tip = ethers.parseEther("0.02");
-      const contractAddr = await tipNft.getAddress();
-      const latestTime = await time.latest();
+      const base = parseEther("0.1");
+      const tip = parseEther("0.02");
+      const latestTime = await networkHelpers.time.latest();
       const value = {
-        recipient: recipient.address,
+        recipient: recipient.account.address,
         uri: "ipfs://split",
         nonce: randomUUID(),
-        currency: ethers.ZeroAddress,
+        currency: zeroAddress,
         basePrice: base,
         creatorTip: tip,
-        deadline: latestTime + 3600,
+        deadline: BigInt(latestTime + 3600),
       };
-      const sig = await owner.signTypedData(
-        {
-          name: SIGNING_DOMAIN_NAME,
-          version: SIGNING_DOMAIN_VERSION,
-          chainId,
-          verifyingContract: contractAddr,
-        },
-        VOUCHER_TYPES,
-        value,
-      );
+      const sig = await owner.signTypedData({
+        domain: makeDomain(tipNft.address),
+        types: VOUCHER_TYPES,
+        primaryType: "NFTVoucher",
+        message: value,
+      });
       const voucher = { ...value, signature: sig };
       const permit = emptyPermit(value.deadline);
 
-      const beforePR = await ethers.provider.getBalance(
-        paymentReceiver.address,
-      );
-      const beforeTip = await ethers.provider.getBalance(tipReceiver.address);
+      const beforePR = await publicClient.getBalance({
+        address: paymentReceiver.account.address,
+      });
+      const beforeTip = await publicClient.getBalance({
+        address: tipReceiver.account.address,
+      });
 
-      await tipNft
-        .connect(recipient)
-        .redeem(voucher, permit, { value: base + tip });
+      await tipNft.write.redeem([voucher, permit], {
+        account: recipient.account,
+        value: base + tip,
+      });
 
-      const afterPR = await ethers.provider.getBalance(paymentReceiver.address);
-      const afterTip = await ethers.provider.getBalance(tipReceiver.address);
+      const afterPR = await publicClient.getBalance({
+        address: paymentReceiver.account.address,
+      });
+      const afterTip = await publicClient.getBalance({
+        address: tipReceiver.account.address,
+      });
 
       expect(afterPR - beforePR).to.equal(base);
       expect(afterTip - beforeTip).to.equal(tip);
     });
 
     it("Should reject if msg.value != basePrice + creatorTip", async function () {
-      const base = ethers.parseEther("0.1");
-      const tip = ethers.parseEther("0.02");
-      const contractAddr = await tipNft.getAddress();
-      const latestTime = await time.latest();
+      const base = parseEther("0.1");
+      const tip = parseEther("0.02");
+      const latestTime = await networkHelpers.time.latest();
       const value = {
-        recipient: recipient.address,
+        recipient: recipient.account.address,
         uri: "ipfs://split",
         nonce: randomUUID(),
-        currency: ethers.ZeroAddress,
+        currency: zeroAddress,
         basePrice: base,
         creatorTip: tip,
-        deadline: latestTime + 3600,
+        deadline: BigInt(latestTime + 3600),
       };
-      const sig = await owner.signTypedData(
-        {
-          name: SIGNING_DOMAIN_NAME,
-          version: SIGNING_DOMAIN_VERSION,
-          chainId,
-          verifyingContract: contractAddr,
-        },
-        VOUCHER_TYPES,
-        value,
-      );
+      const sig = await owner.signTypedData({
+        domain: makeDomain(tipNft.address),
+        types: VOUCHER_TYPES,
+        primaryType: "NFTVoucher",
+        message: value,
+      });
       const voucher = { ...value, signature: sig };
       const permit = emptyPermit(value.deadline);
 
       // Only base, missing tip
-      await expect(
-        tipNft.connect(recipient).redeem(voucher, permit, { value: base }),
-      ).to.be.revertedWithCustomError(tipNft, "ExactETHRequired");
+      await viem.assertions.revertWithCustomError(
+        tipNft.write.redeem([voucher, permit], {
+          account: recipient.account,
+          value: base,
+        }),
+        tipNft,
+        "ExactETHRequired",
+      );
     });
   });
 
@@ -704,17 +819,16 @@ describe("NFTCollection", function () {
   // behavior so anyone who "helpfully" changes it to msg.sender will fail CI.
 
   describe("redeemWithApproval (ERC20 + 4337)", function () {
-    const MINT_PRICE = ethers.parseEther("10");
+    const MINT_PRICE = parseEther("10");
 
     async function createErc20Voucher(
-      recipientAddr: string,
+      recipientAddr: `0x${string}`,
       uri: string,
-      currency: string,
+      currency: `0x${string}`,
       basePrice: bigint,
       nonce: string = randomUUID(),
     ) {
-      const contractAddress = await nft.getAddress();
-      const latestTime = await time.latest();
+      const latestTime = await networkHelpers.time.latest();
       const value = {
         recipient: recipientAddr,
         uri,
@@ -722,83 +836,103 @@ describe("NFTCollection", function () {
         currency,
         basePrice,
         creatorTip: 0n,
-        deadline: latestTime + 3600,
+        deadline: BigInt(latestTime + 3600),
       };
-      const signature = await owner.signTypedData(
-        await makeDomain(contractAddress),
-        VOUCHER_TYPES,
-        value,
-      );
+      const signature = await owner.signTypedData({
+        domain: makeDomain(nft.address),
+        types: VOUCHER_TYPES,
+        primaryType: "NFTVoucher",
+        message: value,
+      });
       return { ...value, signature };
     }
 
     it("Should mint with ETH payment and forward funds", async function () {
-      const price = ethers.parseEther("0.2");
+      const price = parseEther("0.2");
       const voucher = await createErc20Voucher(
-        recipient.address,
+        recipient.account.address,
         "ipfs://eth-approval",
-        ethers.ZeroAddress,
+        zeroAddress,
         price,
       );
 
-      const initialBalance = await ethers.provider.getBalance(
-        paymentReceiver.address,
+      const initialBalance = await publicClient.getBalance({
+        address: paymentReceiver.account.address,
+      });
+
+      await viem.assertions.emitWithArgs(
+        nft.write.redeemWithApproval([voucher], {
+          account: recipient.account,
+          value: price,
+        }),
+        nft,
+        "NFTMinted",
+        [getAddress(recipient.account.address), 1n, "ipfs://eth-approval"],
       );
 
-      await expect(
-        nft.connect(recipient).redeemWithApproval(voucher, { value: price }),
-      )
-        .to.emit(nft, "NFTMinted")
-        .withArgs(recipient.address, 1, "ipfs://eth-approval");
-
-      const finalBalance = await ethers.provider.getBalance(
-        paymentReceiver.address,
-      );
+      const finalBalance = await publicClient.getBalance({
+        address: paymentReceiver.account.address,
+      });
       expect(finalBalance - initialBalance).to.equal(price);
     });
 
     it("Should reject non-exact ETH for redeemWithApproval", async function () {
-      const price = ethers.parseEther("0.2");
+      const price = parseEther("0.2");
       const voucher = await createErc20Voucher(
-        recipient.address,
+        recipient.account.address,
         "ipfs://eth-approval",
-        ethers.ZeroAddress,
+        zeroAddress,
         price,
       );
 
-      await expect(
-        nft
-          .connect(recipient)
-          .redeemWithApproval(voucher, { value: price - 1n }),
-      ).to.be.revertedWithCustomError(nft, "ExactETHRequired");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeemWithApproval([voucher], {
+          account: recipient.account,
+          value: price - 1n,
+        }),
+        nft,
+        "ExactETHRequired",
+      );
     });
 
     it("Should mint when recipient calls directly (EOA path)", async function () {
       const token = await deployErc20();
-      const nftAddr = await nft.getAddress();
       const uri = "ipfs://erc20-eoa";
 
-      await token.transfer(recipient.address, MINT_PRICE);
-      await token.connect(recipient).approve(nftAddr, MINT_PRICE);
+      await token.write.transfer([recipient.account.address, MINT_PRICE]);
+      await token.write.approve([nft.address, MINT_PRICE], {
+        account: recipient.account,
+      });
 
       const voucher = await createErc20Voucher(
-        recipient.address,
+        recipient.account.address,
         uri,
-        await token.getAddress(),
+        token.address,
         MINT_PRICE,
       );
 
-      const receiverBefore = await token.balanceOf(paymentReceiver.address);
+      const receiverBefore = await token.read.balanceOf([
+        paymentReceiver.account.address,
+      ]);
 
-      await expect(nft.connect(recipient).redeemWithApproval(voucher))
-        .to.emit(nft, "NFTMinted")
-        .withArgs(recipient.address, 1, uri);
-
-      expect(await nft.ownerOf(1)).to.equal(recipient.address);
-      expect(await token.balanceOf(recipient.address)).to.equal(0n);
-      expect(await token.balanceOf(paymentReceiver.address)).to.equal(
-        receiverBefore + MINT_PRICE,
+      await viem.assertions.emitWithArgs(
+        nft.write.redeemWithApproval([voucher], {
+          account: recipient.account,
+        }),
+        nft,
+        "NFTMinted",
+        [getAddress(recipient.account.address), 1n, uri],
       );
+
+      expect(await nft.read.ownerOf([1n])).to.equal(
+        getAddress(recipient.account.address),
+      );
+      expect(await token.read.balanceOf([recipient.account.address])).to.equal(
+        0n,
+      );
+      expect(
+        await token.read.balanceOf([paymentReceiver.account.address]),
+      ).to.equal(receiverBefore + MINT_PRICE);
     });
 
     it("Should mint when a third party (bundler) submits on recipient's behalf — 4337 path", async function () {
@@ -806,71 +940,93 @@ describe("NFTCollection", function () {
       // then EntryPoint/Bundler relays the call. msg.sender != voucher.recipient,
       // but the pull still must come from voucher.recipient (who granted allowance).
       const token = await deployErc20();
-      const nftAddr = await nft.getAddress();
       const uri = "ipfs://erc20-bundler";
 
-      await token.transfer(recipient.address, MINT_PRICE);
-      await token.connect(recipient).approve(nftAddr, MINT_PRICE);
+      await token.write.transfer([recipient.account.address, MINT_PRICE]);
+      await token.write.approve([nft.address, MINT_PRICE], {
+        account: recipient.account,
+      });
 
       const voucher = await createErc20Voucher(
-        recipient.address,
+        recipient.account.address,
         uri,
-        await token.getAddress(),
+        token.address,
         MINT_PRICE,
       );
-      const receiverBefore = await token.balanceOf(paymentReceiver.address);
+      const receiverBefore = await token.read.balanceOf([
+        paymentReceiver.account.address,
+      ]);
 
-      await expect(nft.connect(malicious).redeemWithApproval(voucher))
-        .to.emit(nft, "NFTMinted")
-        .withArgs(recipient.address, 1, uri);
-
-      expect(await nft.ownerOf(1)).to.equal(recipient.address);
-      expect(await token.balanceOf(recipient.address)).to.equal(0n);
-      expect(await token.balanceOf(malicious.address)).to.equal(0n);
-      expect(await token.balanceOf(paymentReceiver.address)).to.equal(
-        receiverBefore + MINT_PRICE,
+      await viem.assertions.emitWithArgs(
+        nft.write.redeemWithApproval([voucher], {
+          account: malicious.account,
+        }),
+        nft,
+        "NFTMinted",
+        [getAddress(recipient.account.address), 1n, uri],
       );
+
+      expect(await nft.read.ownerOf([1n])).to.equal(
+        getAddress(recipient.account.address),
+      );
+      expect(await token.read.balanceOf([recipient.account.address])).to.equal(
+        0n,
+      );
+      expect(await token.read.balanceOf([malicious.account.address])).to.equal(
+        0n,
+      );
+      expect(
+        await token.read.balanceOf([paymentReceiver.account.address]),
+      ).to.equal(receiverBefore + MINT_PRICE);
     });
 
     it("Should revert when the recipient has not approved the NFT contract", async function () {
       const token = await deployErc20();
       const uri = "ipfs://erc20-no-approval";
 
-      await token.transfer(recipient.address, MINT_PRICE);
+      await token.write.transfer([recipient.account.address, MINT_PRICE]);
       // No approve
 
       const voucher = await createErc20Voucher(
-        recipient.address,
+        recipient.account.address,
         uri,
-        await token.getAddress(),
+        token.address,
         MINT_PRICE,
       );
 
-      await expect(
-        nft.connect(malicious).redeemWithApproval(voucher),
-      ).to.be.revertedWithCustomError(token, "ERC20InsufficientAllowance");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeemWithApproval([voucher], {
+          account: malicious.account,
+        }),
+        token,
+        "ERC20InsufficientAllowance",
+      );
     });
 
     it("Should revert when a malicious caller crafts a voucher for a different recipient who hasn't approved", async function () {
       const token = await deployErc20();
       const uri = "ipfs://erc20-drain-attempt";
 
-      await token.transfer(malicious.address, MINT_PRICE);
-      await token
-        .connect(malicious)
-        .approve(await nft.getAddress(), MINT_PRICE);
+      await token.write.transfer([malicious.account.address, MINT_PRICE]);
+      await token.write.approve([nft.address, MINT_PRICE], {
+        account: malicious.account,
+      });
 
       // Voucher names `recipient` (not malicious), but recipient has no allowance
       const voucher = await createErc20Voucher(
-        recipient.address,
+        recipient.account.address,
         uri,
-        await token.getAddress(),
+        token.address,
         MINT_PRICE,
       );
 
-      await expect(
-        nft.connect(malicious).redeemWithApproval(voucher),
-      ).to.be.revertedWithCustomError(token, "ERC20InsufficientAllowance");
+      await viem.assertions.revertWithCustomError(
+        nft.write.redeemWithApproval([voucher], {
+          account: malicious.account,
+        }),
+        token,
+        "ERC20InsufficientAllowance",
+      );
     });
   });
 });

@@ -1,68 +1,88 @@
+import { describe, it } from "node:test";
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { time } from "@nomicfoundation/hardhat-network-helpers";
-import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
+import hre from "hardhat";
+import { parseEther, zeroAddress, getAddress } from "viem";
+
+const { viem, networkHelpers } = await hre.network.create();
 
 describe("VestingLockCampaign", function () {
-  const CAP = ethers.parseEther("1000000000");
-  const INITIAL_SUPPLY = ethers.parseEther("100000000");
-  const MIN_LOCK = ethers.parseEther("2500");
-  const REWARD = ethers.parseEther("5000");
-  const USER_LOCK = ethers.parseEther("3000");
+  const CAP = parseEther("1000000000");
+  const INITIAL_SUPPLY = parseEther("100000000");
+  const MIN_LOCK = parseEther("2500");
+  const REWARD = parseEther("5000");
+  const USER_LOCK = parseEther("3000");
   const LOCK_PERIOD = 30 * 24 * 60 * 60;
 
-  async function deployTokenFixture() {
-    const [owner, treasury, user, user2, recipient] = await ethers.getSigners();
+  type Wallet = Awaited<ReturnType<typeof viem.getWalletClients>>[number];
+  type ATTRToken = Awaited<ReturnType<typeof viem.deployContract<"ATTRToken">>>;
+  type Campaign = Awaited<
+    ReturnType<typeof viem.deployContract<"VestingLockCampaign">>
+  >;
 
-    const Token = await ethers.getContractFactory("ATTRToken");
-    const token = await Token.deploy(CAP, INITIAL_SUPPLY, treasury.address);
-    await token.waitForDeployment();
+  async function deployTokenFixture() {
+    const [owner, treasury, user, user2, recipient] =
+      await viem.getWalletClients();
+
+    const token = await viem.deployContract("ATTRToken", [
+      CAP,
+      INITIAL_SUPPLY,
+      treasury.account.address,
+    ]);
 
     return { owner, treasury, user, user2, recipient, token };
   }
 
-  async function campaignConfig(tokenAddress: string, overrides: Record<string, unknown> = {}) {
-    const now = await time.latest();
+  async function campaignConfig(
+    tokenAddress: string,
+    overrides: Record<string, unknown> = {},
+  ) {
+    const now = BigInt(await networkHelpers.time.latest());
 
     return {
       stakingToken: tokenAddress,
       rewardToken: tokenAddress,
       minLockAmount: MIN_LOCK,
-      lockPeriod: LOCK_PERIOD,
+      lockPeriod: BigInt(LOCK_PERIOD),
       rewardAmount: REWARD,
-      campaignStart: now - 10,
-      campaignEnd: now + 7 * 24 * 60 * 60,
-      maxParticipants: 0,
+      campaignStart: now - 10n,
+      campaignEnd: now + 7n * 24n * 60n * 60n,
+      maxParticipants: 0n,
       allowEarlyWithdraw: false,
       ...overrides,
     };
   }
 
-  async function deployCampaignFixture(overrides: Record<string, unknown> = {}) {
+  async function deployCampaignFixture(
+    overrides: Record<string, unknown> = {},
+  ) {
     const fixture = await deployTokenFixture();
-    const tokenAddress = await fixture.token.getAddress();
-    const config = await campaignConfig(tokenAddress, overrides);
+    const config = await campaignConfig(fixture.token.address, overrides);
 
-    const Campaign = await ethers.getContractFactory("VestingLockCampaign");
-    const campaign = await Campaign.deploy(fixture.owner.address, config);
-    await campaign.waitForDeployment();
+    const campaign = await viem.deployContract("VestingLockCampaign", [
+      fixture.owner.account.address,
+      config,
+    ]);
 
     return { ...fixture, campaign, config };
   }
 
   async function fundAndApproveUser() {
     const fixture = await deployCampaignFixture();
-    const campaignAddress = await fixture.campaign.getAddress();
 
-    await fixture.token
-      .connect(fixture.treasury)
-      .approve(campaignAddress, REWARD * 3n);
-    await fixture.campaign.connect(fixture.treasury).fundRewards(REWARD * 3n);
+    await fixture.token.write.approve([fixture.campaign.address, REWARD * 3n], {
+      account: fixture.treasury.account,
+    });
+    await fixture.campaign.write.fundRewards([REWARD * 3n], {
+      account: fixture.treasury.account,
+    });
 
-    await fixture.token
-      .connect(fixture.treasury)
-      .transfer(fixture.user.address, USER_LOCK);
-    await fixture.token.connect(fixture.user).approve(campaignAddress, USER_LOCK);
+    await fixture.token.write.transfer(
+      [fixture.user.account.address, USER_LOCK],
+      { account: fixture.treasury.account },
+    );
+    await fixture.token.write.approve([fixture.campaign.address, USER_LOCK], {
+      account: fixture.user.account,
+    });
 
     return fixture;
   }
@@ -70,25 +90,40 @@ describe("VestingLockCampaign", function () {
   describe("Deployment", function () {
     it("stores reusable campaign parameters", async function () {
       const { campaign, token, config } = await deployCampaignFixture();
-      const tokenAddress = await token.getAddress();
 
-      expect(await campaign.STAKING_TOKEN()).to.equal(tokenAddress);
-      expect(await campaign.REWARD_TOKEN()).to.equal(tokenAddress);
-      expect(await campaign.MIN_LOCK_AMOUNT()).to.equal(config.minLockAmount);
-      expect(await campaign.LOCK_PERIOD()).to.equal(config.lockPeriod);
-      expect(await campaign.REWARD_AMOUNT()).to.equal(config.rewardAmount);
+      expect(await campaign.read.STAKING_TOKEN()).to.equal(
+        getAddress(token.address),
+      );
+      expect(await campaign.read.REWARD_TOKEN()).to.equal(
+        getAddress(token.address),
+      );
+      expect(await campaign.read.MIN_LOCK_AMOUNT()).to.equal(
+        config.minLockAmount,
+      );
+      expect(await campaign.read.LOCK_PERIOD()).to.equal(config.lockPeriod);
+      expect(await campaign.read.REWARD_AMOUNT()).to.equal(config.rewardAmount);
     });
 
     it("rejects invalid configuration", async function () {
       const { owner, token } = await deployTokenFixture();
-      const Campaign = await ethers.getContractFactory("VestingLockCampaign");
-      const config = await campaignConfig(await token.getAddress(), {
-        minLockAmount: 0,
+      const validConfig = await campaignConfig(token.address);
+      const refCampaign = await viem.deployContract("VestingLockCampaign", [
+        owner.account.address,
+        validConfig,
+      ]);
+
+      const invalidConfig = await campaignConfig(token.address, {
+        minLockAmount: 0n,
       });
 
-      await expect(
-        Campaign.deploy(owner.address, config),
-      ).to.be.revertedWithCustomError(Campaign, "InvalidCampaignConfig");
+      await viem.assertions.revertWithCustomError(
+        viem.deployContract("VestingLockCampaign", [
+          owner.account.address,
+          invalidConfig,
+        ]),
+        refCampaign,
+        "InvalidCampaignConfig",
+      );
     });
   });
 
@@ -96,111 +131,176 @@ describe("VestingLockCampaign", function () {
     it("locks tokens and claims the reward after the configured period", async function () {
       const { campaign, token, user } = await fundAndApproveUser();
 
-      await expect(campaign.connect(user).lock(USER_LOCK))
-        .to.emit(campaign, "Locked")
-        .withArgs(user.address, USER_LOCK, anyValue);
+      await viem.assertions.emit(
+        campaign.write.lock([USER_LOCK], { account: user.account }),
+        campaign,
+        "Locked",
+      );
 
-      expect(await token.balanceOf(await campaign.getAddress())).to.equal(
+      expect(await token.read.balanceOf([campaign.address])).to.equal(
         REWARD * 3n + USER_LOCK,
       );
-      expect(await campaign.isRewardClaimable(user.address)).to.equal(false);
+      expect(
+        await campaign.read.isRewardClaimable([user.account.address]),
+      ).to.equal(false);
 
-      await time.increase(LOCK_PERIOD);
+      await networkHelpers.time.increase(BigInt(LOCK_PERIOD));
 
-      await expect(campaign.connect(user).claimReward())
-        .to.emit(campaign, "RewardClaimed")
-        .withArgs(user.address, REWARD);
+      await viem.assertions.emitWithArgs(
+        campaign.write.claimReward({ account: user.account }),
+        campaign,
+        "RewardClaimed",
+        [getAddress(user.account.address), REWARD],
+      );
 
-      expect(await token.balanceOf(user.address)).to.equal(REWARD);
+      expect(await token.read.balanceOf([user.account.address])).to.equal(
+        REWARD,
+      );
 
-      await expect(campaign.connect(user).withdrawLocked())
-        .to.emit(campaign, "LockedTokensWithdrawn")
-        .withArgs(user.address, USER_LOCK, false);
+      await viem.assertions.emitWithArgs(
+        campaign.write.withdrawLocked({ account: user.account }),
+        campaign,
+        "LockedTokensWithdrawn",
+        [getAddress(user.account.address), USER_LOCK, false],
+      );
 
-      expect(await token.balanceOf(user.address)).to.equal(REWARD + USER_LOCK);
+      expect(await token.read.balanceOf([user.account.address])).to.equal(
+        REWARD + USER_LOCK,
+      );
     });
 
     it("does not allow a reward claim before the lock period", async function () {
       const { campaign, user } = await fundAndApproveUser();
 
-      await campaign.connect(user).lock(USER_LOCK);
+      await campaign.write.lock([USER_LOCK], { account: user.account });
 
-      await expect(
-        campaign.connect(user).claimReward(),
-      ).to.be.revertedWithCustomError(campaign, "RewardNotClaimable");
+      await viem.assertions.revertWithCustomError(
+        campaign.write.claimReward({ account: user.account }),
+        campaign,
+        "RewardNotClaimable",
+      );
     });
 
     it("prevents more than one position per wallet", async function () {
       const { campaign, token, treasury, user } = await fundAndApproveUser();
-      const campaignAddress = await campaign.getAddress();
 
-      await campaign.connect(user).lock(USER_LOCK);
+      await campaign.write.lock([USER_LOCK], { account: user.account });
 
-      await token.connect(treasury).transfer(user.address, USER_LOCK);
-      await token.connect(user).approve(campaignAddress, USER_LOCK);
+      await token.write.transfer([user.account.address, USER_LOCK], {
+        account: treasury.account,
+      });
+      await token.write.approve([campaign.address, USER_LOCK], {
+        account: user.account,
+      });
 
-      await expect(
-        campaign.connect(user).lock(USER_LOCK),
-      ).to.be.revertedWithCustomError(campaign, "PositionAlreadyExists");
+      await viem.assertions.revertWithCustomError(
+        campaign.write.lock([USER_LOCK], { account: user.account }),
+        campaign,
+        "PositionAlreadyExists",
+      );
     });
 
     it("enforces the minimum lock amount", async function () {
       const { campaign, token, treasury, user } = await deployCampaignFixture();
-      const campaignAddress = await campaign.getAddress();
       const tooSmall = MIN_LOCK - 1n;
 
-      await token.connect(treasury).transfer(user.address, tooSmall);
-      await token.connect(user).approve(campaignAddress, tooSmall);
+      await token.write.transfer([user.account.address, tooSmall], {
+        account: treasury.account,
+      });
+      await token.write.approve([campaign.address, tooSmall], {
+        account: user.account,
+      });
 
-      await expect(
-        campaign.connect(user).lock(tooSmall),
-      ).to.be.revertedWithCustomError(campaign, "InsufficientLockAmount");
+      await viem.assertions.revertWithCustomError(
+        campaign.write.lock([tooSmall], { account: user.account }),
+        campaign,
+        "InsufficientLockAmount",
+      );
     });
   });
 
   describe("Withdrawals", function () {
     it("can allow early withdrawal and forfeit the reward", async function () {
-      const earlyFixture = await deployCampaignFixture({ allowEarlyWithdraw: true });
-      const campaignAddress = await earlyFixture.campaign.getAddress();
-      await earlyFixture.token
-        .connect(earlyFixture.treasury)
-        .approve(campaignAddress, REWARD);
-      await earlyFixture.campaign.connect(earlyFixture.treasury).fundRewards(REWARD);
-      await earlyFixture.token
-        .connect(earlyFixture.treasury)
-        .transfer(earlyFixture.user.address, USER_LOCK);
-      await earlyFixture.token.connect(earlyFixture.user).approve(campaignAddress, USER_LOCK);
+      const earlyFixture = await deployCampaignFixture({
+        allowEarlyWithdraw: true,
+      });
+      await earlyFixture.token.write.approve(
+        [earlyFixture.campaign.address, REWARD],
+        { account: earlyFixture.treasury.account },
+      );
+      await earlyFixture.campaign.write.fundRewards([REWARD], {
+        account: earlyFixture.treasury.account,
+      });
+      await earlyFixture.token.write.transfer(
+        [earlyFixture.user.account.address, USER_LOCK],
+        { account: earlyFixture.treasury.account },
+      );
+      await earlyFixture.token.write.approve(
+        [earlyFixture.campaign.address, USER_LOCK],
+        { account: earlyFixture.user.account },
+      );
 
-      await earlyFixture.campaign.connect(earlyFixture.user).lock(USER_LOCK);
-      await expect(earlyFixture.campaign.connect(earlyFixture.user).withdrawLocked())
-        .to.emit(earlyFixture.campaign, "LockedTokensWithdrawn")
-        .withArgs(earlyFixture.user.address, USER_LOCK, true);
+      await earlyFixture.campaign.write.lock([USER_LOCK], {
+        account: earlyFixture.user.account,
+      });
+      await viem.assertions.emitWithArgs(
+        earlyFixture.campaign.write.withdrawLocked({
+          account: earlyFixture.user.account,
+        }),
+        earlyFixture.campaign,
+        "LockedTokensWithdrawn",
+        [getAddress(earlyFixture.user.account.address), USER_LOCK, true],
+      );
 
-      expect(await earlyFixture.campaign.isRewardClaimable(earlyFixture.user.address)).to.equal(false);
-      expect(await earlyFixture.campaign.rewardsForfeitedCount()).to.equal(1);
+      expect(
+        await earlyFixture.campaign.read.isRewardClaimable([
+          earlyFixture.user.account.address,
+        ]),
+      ).to.equal(false);
+      expect(await earlyFixture.campaign.read.rewardsForfeitedCount()).to.equal(
+        1n,
+      );
 
-      await time.increase(LOCK_PERIOD);
-      await expect(
-        earlyFixture.campaign.connect(earlyFixture.user).claimReward(),
-      ).to.be.revertedWithCustomError(earlyFixture.campaign, "RewardNotClaimable");
+      await networkHelpers.time.increase(BigInt(LOCK_PERIOD));
+      await viem.assertions.revertWithCustomError(
+        earlyFixture.campaign.write.claimReward({
+          account: earlyFixture.user.account,
+        }),
+        earlyFixture.campaign,
+        "RewardNotClaimable",
+      );
     });
 
     it("does not sweep locked principal when ATTR is both stake and reward token", async function () {
-      const { campaign, token, treasury, user, recipient } = await fundAndApproveUser();
+      const { campaign, token, treasury, user, recipient } =
+        await fundAndApproveUser();
 
-      await campaign.connect(user).lock(USER_LOCK);
-      await time.increase(LOCK_PERIOD + 8 * 24 * 60 * 60);
+      await campaign.write.lock([USER_LOCK], { account: user.account });
+      await networkHelpers.time.increase(
+        BigInt(LOCK_PERIOD + 8 * 24 * 60 * 60),
+      );
 
-      const balanceBefore = await token.balanceOf(recipient.address);
-      await token.connect(treasury).approve(await campaign.getAddress(), REWARD);
-      await campaign.connect(treasury).fundRewards(REWARD);
+      const balanceBefore = await token.read.balanceOf([
+        recipient.account.address,
+      ]);
+      await token.write.approve([campaign.address, REWARD], {
+        account: treasury.account,
+      });
+      await campaign.write.fundRewards([REWARD], {
+        account: treasury.account,
+      });
 
-      await expect(campaign.sweepUnallocatedRewards(recipient.address))
-        .to.emit(campaign, "RewardSwept")
-        .withArgs(recipient.address, REWARD * 3n);
+      await viem.assertions.emitWithArgs(
+        campaign.write.sweepUnallocatedRewards([recipient.account.address]),
+        campaign,
+        "RewardSwept",
+        [getAddress(recipient.account.address), REWARD * 3n],
+      );
 
-      expect(await token.balanceOf(recipient.address)).to.equal(balanceBefore + REWARD * 3n);
-      expect(await token.balanceOf(await campaign.getAddress())).to.equal(
+      expect(await token.read.balanceOf([recipient.account.address])).to.equal(
+        balanceBefore + REWARD * 3n,
+      );
+      expect(await token.read.balanceOf([campaign.address])).to.equal(
         USER_LOCK + REWARD,
       );
     });
@@ -209,44 +309,50 @@ describe("VestingLockCampaign", function () {
 
 describe("VestingLockCampaignFactory", function () {
   it("deploys isolated campaigns and records them", async function () {
-    const [owner, treasury] = await ethers.getSigners();
-    const Token = await ethers.getContractFactory("ATTRToken");
-    const token = await Token.deploy(
-      ethers.parseEther("1000000000"),
-      ethers.parseEther("100000000"),
-      treasury.address,
-    );
-    await token.waitForDeployment();
+    const [owner, treasury] = await viem.getWalletClients();
+    const token = await viem.deployContract("ATTRToken", [
+      parseEther("1000000000"),
+      parseEther("100000000"),
+      treasury.account.address,
+    ]);
 
-    const Factory = await ethers.getContractFactory("VestingLockCampaignFactory");
-    const factory = await Factory.deploy(owner.address);
-    await factory.waitForDeployment();
+    const factory = await viem.deployContract("VestingLockCampaignFactory", [
+      owner.account.address,
+    ]);
 
-    const now = await time.latest();
+    const now = BigInt(await networkHelpers.time.latest());
     const config = {
-      stakingToken: await token.getAddress(),
-      rewardToken: await token.getAddress(),
-      minLockAmount: ethers.parseEther("100"),
-      lockPeriod: 7 * 24 * 60 * 60,
-      rewardAmount: ethers.parseEther("25"),
+      stakingToken: token.address,
+      rewardToken: token.address,
+      minLockAmount: parseEther("100"),
+      lockPeriod: 7n * 24n * 60n * 60n,
+      rewardAmount: parseEther("25"),
       campaignStart: now,
-      campaignEnd: now + 30 * 24 * 60 * 60,
-      maxParticipants: 100,
+      campaignEnd: now + 30n * 24n * 60n * 60n,
+      maxParticipants: 100n,
       allowEarlyWithdraw: true,
     };
 
-    await expect(factory.createCampaign(config)).to.emit(factory, "CampaignDeployed");
+    await viem.assertions.emit(
+      factory.write.createCampaign([config]),
+      factory,
+      "CampaignDeployed",
+    );
 
-    expect(await factory.getCampaignCount()).to.equal(1);
-    const campaignAddress = await factory.getCampaignAt(0);
-    expect(campaignAddress).to.not.equal(ethers.ZeroAddress);
+    expect(await factory.read.getCampaignCount()).to.equal(1n);
+    const campaignAddress = await factory.read.getCampaignAt([0n]);
+    expect(campaignAddress).to.not.equal(zeroAddress);
 
-    const deployedCampaign = await ethers.getContractAt(
+    const deployedCampaign = await viem.getContractAt(
       "VestingLockCampaign",
       campaignAddress,
     );
-    expect(await deployedCampaign.owner()).to.equal(owner.address);
-    expect(await deployedCampaign.MIN_LOCK_AMOUNT()).to.equal(config.minLockAmount);
-    expect(await deployedCampaign.ALLOW_EARLY_WITHDRAW()).to.equal(true);
+    expect(await deployedCampaign.read.owner()).to.equal(
+      getAddress(owner.account.address),
+    );
+    expect(await deployedCampaign.read.MIN_LOCK_AMOUNT()).to.equal(
+      config.minLockAmount,
+    );
+    expect(await deployedCampaign.read.ALLOW_EARLY_WITHDRAW()).to.equal(true);
   });
 });
