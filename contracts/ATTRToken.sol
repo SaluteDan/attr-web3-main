@@ -13,7 +13,7 @@ import "./Errors.sol";
 
 /**
  * @title ATTRToken
- * @author Attributes Platform
+ * @author Attributes Gallery
  * @notice "Attribute Point" ($ATTR) - The Native Token of the Attributes platform.
  * @dev Features: Capped Supply, Burnable, Gasless Approvals (Permit), Access Control, Governance (Votes), Pausable.
  */
@@ -60,15 +60,17 @@ contract ATTRToken is ERC20, ERC20Burnable, ERC20Capped, ERC20Permit, ERC20Votes
     }
 
     /**
-     * @notice Pause all token transfers and minting.
+     * @notice Pause minting of new tokens.
      * @dev Restricted to addresses with DEFAULT_ADMIN_ROLE. Emits Paused event.
+     *      Only `mint()` is gated by the pause state; existing token transfers,
+     *      approvals, and burns remain enabled while paused.
      */
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _pause();
     }
 
     /**
-     * @notice Unpause token transfers and minting, restoring normal operation.
+     * @notice Unpause minting, restoring the ability to mint new tokens.
      * @dev Restricted to addresses with DEFAULT_ADMIN_ROLE. Emits Unpaused event.
      */
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
