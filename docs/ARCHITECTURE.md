@@ -44,7 +44,7 @@ test/
   contracts/*.test.ts   Hardhat (viem) unit tests
   fuzz/*.t.sol          Foundry fuzz/invariant tests
 docs/
-  deployment/           deployment-era guides/records (see DOC-INDEX; INDEX.md is stale)
+  deployment/           archive index (historical docs are in docs/archive/deployment/; see INDEX.md)
   test/                 TESTING_STRATEGY.md, INSTALL_FOUNDRY.md
 bin/verify-contract.cjs Published verify binary (attr-web3-verify-contract)
 ```
