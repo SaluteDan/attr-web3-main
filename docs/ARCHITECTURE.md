@@ -58,9 +58,10 @@ bin/verify-contract.cjs Published verify binary (attr-web3-verify-contract)
   routing: ATTR → `ATTRSpender.collectPayment(payer,…)`; other ERC20 →
   `safeTransferFrom(voucher.recipient,…)`; ETH → exact `msg.value` forwarded.
   Funds pull from **`voucher.recipient`** (ERC-4337-safe), not `msg.sender`.
-- **MembershipToken** is standalone (tiers, votes, royalties); its sale proceeds
-  route through **MembershipSaleSplitter** → **MembershipFeeDistributor** to
-  holders.
+- **MembershipToken** is standalone (tiers, votes, royalties). When its
+  `paymentReceiver` is **MembershipSaleSplitter**, sale proceeds split 70% to
+  `treasuryOps` and 30% to `liquidityReceiver`. **MembershipFeeDistributor**
+  receives separate owner-initiated deposits for holders.
 - **VestingLockCampaignFactory** deploys isolated **VestingLockCampaign**
   instances (immutable per-campaign terms; treasury pre-funds rewards).
 
