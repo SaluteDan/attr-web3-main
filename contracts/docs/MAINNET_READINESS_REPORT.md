@@ -1,3 +1,16 @@
+> **⚠️ STATUS: STALE — do not treat as a current readiness sign-off.**
+> Reviewed 2026-10-03. This report (April 17, 2026) pre-dates significant
+> contract changes and its figures no longer match the code:
+> - Test counts below (**128/128**) are historical; the suite has since grown.
+> - It reviews a **`GovernanceNFT`** contract that no longer exists
+>   (`MembershipToken` absorbed it) and omits **`ATTRSpender`,
+>   `MembershipSaleSplitter`, `MembershipFeeDistributor`, `VestingLockCampaign`,
+>   `VestingLockCampaignFactory`**.
+> - MembershipToken is described as "DEFERRED" — superseded by the current
+>   MembershipToken + splitter + distributor design.
+> Re-baseline before any mainnet go/no-go. See `docs/ARCHITECTURE.md` and the
+> repo `README.md` for the current contract set.
+
 # Smart Contract Mainnet Readiness Report
 
 **Date:** April 17, 2026  
