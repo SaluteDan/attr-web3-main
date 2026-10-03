@@ -36,7 +36,7 @@
     "prepublishOnly": "npm run compile && npm run build",
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "test:contracts": "hardhat test test/contracts/**/*.test.ts",
+    "test:contracts": "hardhat test",
     "test:fuzz": "forge test",
     "coverage": "hardhat test --coverage",
     "lint:sol": "solhint \"contracts/**/*.sol\"",
