@@ -3,6 +3,10 @@
 _Local architecture for the contracts repo. Last reviewed 2026-10-03._
 _System-level view: workspace `docs/ARCHITECTURE.md`. Engineering bible: `specs/grail/`._
 
+> **Before writing any code, read `agents/README.md`** (workspace standing rules)
+> and the Contracts Engineer card's "Read before writing" block. Rules are known
+> before code is written — not fixed at review.
+
 ## What this repo is
 
 Solidity smart contracts, Hardhat + Foundry tests, deploy/verify scripts, and the
