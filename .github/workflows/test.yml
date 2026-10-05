@@ -81,10 +81,11 @@ jobs:
       - name: Compile contracts
         run: npm run compile
 
-      # Slither always exits 0 without --fail-* flags; the baseline gate below
-      # is what fails on NEW findings (see slither.baseline.json + the script).
+      # Slither exits non-zero when it detects ANY finding, so `--fail-none` is
+      # required here: the baseline gate below is what fails on NEW findings
+      # (see slither.baseline.json + scripts/util/slither-baseline.js).
       - name: Run Slither (JSON report)
-        run: slither . --config-file slither.config.json --json slither-report.json
+        run: slither . --config-file slither.config.json --json slither-report.json --fail-none
 
       - name: Gate against baseline
         run: node scripts/util/slither-baseline.js

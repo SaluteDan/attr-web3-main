@@ -17,7 +17,14 @@
  *
  * A fingerprint is intentionally line-number independent so that unrelated
  * edits do not invalidate the baseline. It is:
- *   <check> | <impact> | <contract> | <symbol> | <relative file>
+ *   <check> | <impact> | <contract> | <symbol> | <relative file> | <detail>
+ *
+ * The <detail> component is a finding-specific, line-normalised form of the
+ * detector description. Without it, two distinct findings that share the same
+ * check + impact in the same function collapse to one fingerprint once the Set
+ * dedupes them, so a genuinely NEW second finding in a baselined function is
+ * silently missed. Occurrence COUNTS are also compared so that an additional
+ * identical finding (same fingerprint) still trips the gate.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -48,6 +55,21 @@ if (report.success === false) {
 
 const detectors = (report.results && report.results.detectors) || [];
 
+/**
+ * Normalise a detector description into a line-number independent,
+ * finding-specific detail string. Line refs (`#12-15`) and absolute file
+ * paths are stripped so unrelated edits that shift lines do not invalidate
+ * the detail.
+ */
+function normaliseDetail(description) {
+  return (description || '')
+    .replace(/\n|\t/g, ' ')
+    .replace(/#\d+(?:-\d+)?/g, '#')
+    .replace(/\/\S+\.sol/g, 'FILE')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function fingerprint(detector) {
   const first = (detector.elements && detector.elements[0]) || {};
   const mapping = first.source_mapping || {};
@@ -57,16 +79,26 @@ function fingerprint(detector) {
     parent.name || (first.type === 'contract' ? first.name : '') || 'global';
   const symbol = first.name || '';
   const file = mapping.filename_relative || mapping.filename_short || '';
+  const detail = normaliseDetail(detector.description);
   return [
     detector.check || 'unknown',
     detector.impact || 'Unknown',
     contract,
     symbol,
     file,
+    detail,
   ].join(' | ');
 }
 
-const current = [...new Set(detectors.map(fingerprint))].sort();
+// Retain occurrence COUNTS per fingerprint so an additional finding that shares
+// an existing fingerprint (e.g. another identical instance in the same
+// function) still fails the gate instead of being deduped away.
+const currentCounts = new Map();
+for (const detector of detectors) {
+  const key = fingerprint(detector);
+  currentCounts.set(key, (currentCounts.get(key) || 0) + 1);
+}
+const current = [...currentCounts.keys()].sort();
 
 if (writeMode) {
   const payload = {
@@ -74,6 +106,9 @@ if (writeMode) {
       'Slither baseline — regenerate with: node scripts/util/slither-baseline.js --write',
     generatedAt: new Date().toISOString().slice(0, 10),
     fingerprints: current,
+    counts: Object.fromEntries(
+      [...currentCounts.entries()].sort(([a], [b]) => (a < b ? -1 : 1)),
+    ),
   };
   writeFileSync(BASELINE, `${JSON.stringify(payload, null, 2)}\n`);
   console.log(
@@ -82,12 +117,22 @@ if (writeMode) {
   process.exit(0);
 }
 
-const baseline = existsSync(BASELINE)
-  ? new Set(JSON.parse(readFileSync(BASELINE, 'utf8')).fingerprints || [])
-  : new Set();
+const baselineFile = existsSync(BASELINE)
+  ? JSON.parse(readFileSync(BASELINE, 'utf8'))
+  : {};
+const baseline = new Set(baselineFile.fingerprints || []);
+// Older baselines predate `counts`; fall back to 1 per fingerprint (the
+// minimum needed to match) so the gate still works until refreshed.
+const baselineCounts = baselineFile.counts || {};
 
 const newFindings = current.filter((f) => !baseline.has(f));
-const resolved = [...baseline].filter((f) => !current.includes(f));
+// A fingerprint present in the baseline whose occurrence count grew is also a
+// NEW finding (same check/function, additional instance).
+const grownFindings = current.filter(
+  (f) =>
+    baseline.has(f) && currentCounts.get(f) > (baselineCounts[f] ?? 1),
+);
+const resolved = [...baseline].filter((f) => !currentCounts.has(f));
 
 console.log(
   `[slither-baseline] ${current.length} finding(s) in report, ${baseline.size} in baseline`,
@@ -106,6 +151,21 @@ if (newFindings.length) {
     `\n[slither-baseline] ${newFindings.length} NEW finding(s) not in the baseline:`,
   );
   for (const f of newFindings) console.error(`  ! ${f}`);
+}
+
+if (grownFindings.length) {
+  console.error(
+    `\n[slither-baseline] ${grownFindings.length} finding(s) with MORE occurrences ` +
+      'than the baseline (additional instance in a baselined location):',
+  );
+  for (const f of grownFindings) {
+    console.error(
+      `  ! ${f} (report: ${currentCounts.get(f)}, baseline: ${baselineCounts[f] ?? 1})`,
+    );
+  }
+}
+
+if (newFindings.length || grownFindings.length) {
   console.error(
     '\nFix the finding(s), or — if reviewed and accepted — refresh the ' +
       'baseline with: node scripts/util/slither-baseline.js --write',

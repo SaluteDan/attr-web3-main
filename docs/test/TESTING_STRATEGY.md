@@ -399,7 +399,11 @@ baseline, gas snapshots, and the coverage limitation. In short:
   `npm run lint:sol` — each fails the build.
 - A dedicated **Slither** job gates against a committed baseline (new findings
   only).
-- A dedicated **Foundry fuzz** job runs `forge test`.
+- **No Foundry fuzz job runs in CI**: `forge test` is explicitly **excluded**
+  because the named invariant `invariant_SumOfBalancesEqualsSupply` is
+  unreliable (see [CI & Quality Gates](./CI_AND_GATES.md) and the workflow
+  NOTE). Fuzz results are **not** a CI gate; run `npm run test:fuzz` locally
+  only.
 - Coverage is informational; the Codecov upload only runs when a report exists.
 
 Local equivalent: `npm run gate`.
