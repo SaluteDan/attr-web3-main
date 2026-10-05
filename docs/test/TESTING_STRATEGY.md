@@ -390,44 +390,19 @@ npx hardhat console --network baseSepolia
 
 ### GitHub Actions Workflow
 
-```yaml
-# .github/workflows/test.yml
-name: Smart Contract Tests
+The workflow lives in
+[`.github/workflows/test.yml`](../../.github/workflows/test.yml); see
+[CI & Quality Gates](./CI_AND_GATES.md) for the gate matrix, the Slither
+baseline, gas snapshots, and the coverage limitation. In short:
 
-on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
+- **Node 20**, `npm ci`, then `npm run compile`, `npm run test:contracts`,
+  `npm run lint:sol` — each fails the build.
+- A dedicated **Slither** job gates against a committed baseline (new findings
+  only).
+- A dedicated **Foundry fuzz** job runs `forge test`.
+- Coverage is informational; the Codecov upload only runs when a report exists.
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run unit tests
-        run: npx hardhat test
-
-      - name: Run static analysis
-        run: |
-          npm install -g solhint
-          npx solhint contracts/**/*.sol
-
-      - name: Check code coverage
-        run: npx hardhat coverage
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
-```
+Local equivalent: `npm run gate`.
 
 ### Pre-Commit Hooks
 

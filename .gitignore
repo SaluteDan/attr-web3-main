@@ -6,6 +6,7 @@ cache/
 .vscode/
 coverage/
 coverage.json
+slither-report.json
 foundry-cache/
 foundry-out/
 typechain-types/

@@ -1,4 +1,4 @@
-name: Smart Contract Tests
+name: Smart Contract CI
 
 on:
   push:
@@ -6,30 +6,102 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: Compile · Unit tests · Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      #   - name: Run unit tests
-      #     run: npx hardhat test
+      - name: Compile contracts
+        run: npm run compile
 
-      - name: Run static analysis
+      - name: Run unit tests
+        run: npm run test:contracts
+
+      - name: Lint Solidity
+        run: npm run lint:sol
+
+      # Coverage is generated for reporting, not used as a required gate:
+      # solidity-coverage's EIP-7825 tx-gas cap (2**24) can be exceeded by its
+      # own instrumented bytecode on a test that passes uninstrumented. Only the
+      # upload is conditional on a report actually existing.
+      - name: Generate coverage
+        run: npm run coverage
+        continue-on-error: true
+
+      - name: Upload coverage to Codecov
+        if: ${{ hashFiles('coverage.json') != '' }}
+        continue-on-error: true
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.json
+          fail_ci_if_error: false
+
+  slither:
+    name: Slither static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Slither
         run: |
-          npm install -g solhint
-          npx solhint contracts/**/*.sol
+          python -m pip install --upgrade pip
+          python -m pip install slither-analyzer
+          solc-select install 0.8.26
+          solc-select use 0.8.26
 
-      #   - name: Check code coverage
-      #     run: npx hardhat coverage
+      - name: Compile contracts
+        run: npm run compile
 
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
+      # Slither always exits 0 without --fail-* flags; the baseline gate below
+      # is what fails on NEW findings (see slither.baseline.json + the script).
+      - name: Run Slither (JSON report)
+        run: slither . --config-file slither.config.json --json slither-report.json
+
+      - name: Gate against baseline
+        run: node scripts/util/slither-baseline.js
+
+      - name: Upload Slither report
+        if: ${{ always() && hashFiles('slither-report.json') != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: slither-report
+          path: slither-report.json
+
+  # NOTE: Foundry fuzz/invariant tests are intentionally NOT a CI job yet.
+  # `forge test` currently fails non-deterministically on a pre-existing invalid
+  # invariant in test/fuzz/ATTRToken.fuzz.t.sol:
+  # invariant_SumOfBalancesEqualsSupply() sums a fixed set of holders while the
+  # fuzzer moves ATTR directly, so any transfer to an untracked address breaks
+  # it. Fix the invariant (or scope invariant fuzzing to a handler) before
+  # wiring `forge test` as a required gate. Until then run it locally with
+  # `npm run test:fuzz`.

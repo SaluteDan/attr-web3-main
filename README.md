@@ -14,10 +14,18 @@ cp .env.example .env
 ```bash
 npm run compile
 npm test
+npm run test:contracts
 npm run test:fuzz
 npm run lint:sol
+npm run gate
+npm run slither
+npm run gas:check
 npm run verify:contract
 ```
+
+`npm run gate` (compile + unit tests + Solidity lint) is the pre-PR check. CI,
+the Slither baseline, gas snapshots, and the coverage limitation are documented
+in [`docs/test/CI_AND_GATES.md`](docs/test/CI_AND_GATES.md).
 
 The backend calls `npm run verify:contract` with a JSON payload on stdin. This repo owns the local Hardhat configuration and contract sources used for Basescan verification.
 
