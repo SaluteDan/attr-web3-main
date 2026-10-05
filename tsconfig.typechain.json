@@ -1,3 +1,12 @@
+// DEPRECATED — do not use.
+//
+// TypeChain was removed from attr-web3: contract interactions are typed via
+// viem-inferred types (see src/index.ts, which re-exports the ABIs from the
+// Hardhat artifacts). `typechain-types/` is untracked/gitignored and can no
+// longer be regenerated (the typechain Hardhat plugin is not installed), so it
+// must never be compiled or shipped. This file is kept only as a tombstone so
+// the old path is obviously dead; typechain output is excluded in
+// tsconfig.build.json and pruned from `dist/` by the `clean` npm script.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {

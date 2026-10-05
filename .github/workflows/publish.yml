@@ -1,0 +1,115 @@
+name: Publish to npm
+
+# Release ritual — read this before tagging.
+#
+# A release is exactly two things that must agree:
+#   1. package.json "version"  (set by the Contracts/decision owner in a PR)
+#   2. a git tag `vX.Y.Z` pushed to the canonical repo (SaluteDan/attr-web3-main)
+#
+# The publish job FAILS if the tag (or the workflow_dispatch input) does not
+# equal package.json version. There is no auto-bump and no continue-on-error:
+# tag == version, or nothing is published.
+#
+# `npm publish` runs with --provenance against PUBLIC npm and requires the
+# NPM_TOKEN repo secret (a Granular/Automation token with publish rights for
+# `attr-web3`). The secret is only ever referenced by name; it is never printed.
+#
+# Manual validation: run this workflow via "Run workflow" (workflow_dispatch)
+# and leave dry_run=true. That path runs the full gate + `npm pack --dry-run`
+# + `npm publish --dry-run` and uploads the tarball as an artifact, without
+# publishing anything. Set dry_run=false only for a real release, and only on
+# a commit whose package.json version already matches the desired tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version/tag to release (e.g. v3.0.6). MUST equal package.json version."
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run (validate only; do NOT publish to npm)"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Gate · Verify tag · Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npm run compile
+
+      - name: Build package
+        run: npm run build
+
+      # Required gate. Fail-closed: if the contracts test suite fails, the job
+      # stops here and nothing is published.
+      - name: Run contract tests (release gate)
+        run: npm run test:contracts
+
+      - name: Resolve expected version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ github.event.inputs.version }}"
+          else
+            RAW="${GITHUB_REF_NAME}"
+          fi
+          EXPECTED="${RAW#v}"
+          echo "package.json version : ${PKG_VERSION}"
+          echo "requested version    : ${EXPECTED}"
+          if [ -z "${EXPECTED}" ]; then
+            echo "::error::No version/tag resolved (tag or dispatch input is empty)."
+            exit 1
+          fi
+          if [ "${EXPECTED}" != "${PKG_VERSION}" ]; then
+            echo "::error::Version mismatch: tag/dispatch says '${EXPECTED}' but package.json is '${PKG_VERSION}'. Refusing to publish."
+            exit 1
+          fi
+          echo "version=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}" >> "$GITHUB_OUTPUT"
+
+      # Validate what would ship without contacting the registry.
+      - name: Pack dry run
+        run: npm pack --dry-run
+
+      - name: Publish (dry run)
+        if: ${{ steps.version.outputs.dry_run == 'true' }}
+        run: npm publish --dry-run --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish (real)
+        if: ${{ steps.version.outputs.dry_run != 'true' }}
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
