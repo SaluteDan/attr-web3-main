@@ -47,6 +47,11 @@ concurrency:
 jobs:
   publish:
     name: Gate · Verify tag · Publish
+    # Release ref guard (fail-closed): publish only from the canonical release
+    # refs — a `v*` tag push, or a manual workflow_dispatch from `main`. A
+    # dispatch from any other branch is skipped entirely (even dry_run), so a
+    # maintainer cannot publish from a non-main branch.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -75,6 +80,14 @@ jobs:
       # stops here and nothing is published.
       - name: Run contract tests (release gate)
         run: npm run test:contracts
+
+      # Required gate. Keep release parity with test.yml for the fast, cheap
+      # checks. Slither is intentionally NOT duplicated here: it needs a Python
+      # toolchain (pip + solc-select) and several minutes, and any release ref
+      # is a commit on `main`/a `v*` tag whose commit already passed the
+      # `slither` job in test.yml.
+      - name: Lint Solidity (release gate)
+        run: npm run lint:sol
 
       - name: Resolve expected version
         id: version
