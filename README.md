@@ -4,6 +4,8 @@ Smart contracts, contract tests, deployment scripts, and Basescan verification c
 
 ## Setup
 
+Requires **Node `>=22.13.0`** (Hardhat v3 does not support Node 20).
+
 ```bash
 npm install
 cp .env.example .env

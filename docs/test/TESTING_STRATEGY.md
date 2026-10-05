@@ -395,7 +395,7 @@ The workflow lives in
 [CI & Quality Gates](./CI_AND_GATES.md) for the gate matrix, the Slither
 baseline, gas snapshots, and the coverage limitation. In short:
 
-- **Node 20**, `npm ci`, then `npm run compile`, `npm run test:contracts`,
+- **Node 22** (`>=22.13.0` — Hardhat v3 refuses Node 20), `npm ci`, then `npm run compile`, `npm run test:contracts`,
   `npm run lint:sol` — each fails the build.
 - A dedicated **Slither** job gates against a committed baseline (new findings
   only).
