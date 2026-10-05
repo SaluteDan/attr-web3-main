@@ -25,6 +25,16 @@ with `npm run test:fuzz`.
 Node is pinned to **20** (`engines.node >= 20`). CI never auto-fixes or commits;
 gates fail loudly.
 
+### Install: `legacy-peer-deps`
+
+CI installs with `npm ci`. The committed `.npmrc` sets
+`legacy-peer-deps=true` (as the frontend and backend repos do):
+`solidity-coverage@0.8.17` declares a peerDependency on `hardhat@^2.11.0` while
+this repo runs `hardhat@3.4.5`, which otherwise fails `npm ci` with `ERESOLVE`
+before any gate runs. solidity-coverage is used only for the informational
+coverage step (not a required gate), so ignoring its stale peer range is
+intentional rather than silencing a real incompatibility.
+
 ### Local equivalent
 
 ```bash
@@ -71,7 +81,7 @@ Only **new** findings fail CI. Refreshing the baseline is a reviewed decision â€
 treat it like changing a test expectation. `slither-report.json` is generated
 and git-ignored; the baseline is committed.
 
-**Current state**: 28 baselined findings, all Low / Informational /
+**Current state**: 30 baselined findings, all Low / Informational /
 Optimization (e.g. `low-level-calls`, `immutable-states`, `calls-loop`) on the
 payment/vesting paths. No High or Medium findings. Baseline these deliberately
 rather than suppressing detectors globally.
