@@ -4,12 +4,28 @@ Smart contracts, contract tests, deployment scripts, and Basescan verification c
 
 ## Setup
 
-Requires **Node `>=22.13.0`** (Hardhat v3 does not support Node 20).
+**Repo development** requires **Node `>=22.13.0`** (Hardhat v3 does not support
+Node 20 — enforced via `devEngines` and `.nvmrc`).
 
 ```bash
 npm install
 cp .env.example .env
 ```
+
+### Runtime requirement (consumers)
+
+The **published package** (`dist/src/index.js`, the ABIs/bytecode entry point)
+has a much lower floor: `engines.node` is `>=18.20.0`. It is plain ESM — JSON
+imports via import attributes plus `export const` object literals — and pulls in
+no Hardhat and no Node 20+/22-only APIs. Node ≥18.20 is the minimum that parses
+`import … with { type: "json" }` natively (import attributes landed in Node
+18.20; 18.0–18.19 would throw a syntax error). Consumers on Node 20 (`attr-backend`,
+`frontend-ui`) install with no `EBADENGINE` warning.
+
+| Context | Node floor | Why |
+| --- | --- | --- |
+| Published runtime (`engines.node`) | `>=18.20.0` | compiled ABIs/bytecode ESM only |
+| Repo dev / CI (`devEngines`, `.nvmrc`, CI pin) | `>=22.13.0` | Hardhat v3 requires it |
 
 ## Common Commands
 

@@ -33,8 +33,6 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "postbuild": "node scripts/util/copy-artifacts.js",
-    "test:build": "node --test test/build/*.test.js",
     "check:package": "bash scripts/util/check-package.sh",
     "prepublishOnly": "npm run compile && npm run build",
     "compile": "hardhat compile",
@@ -65,7 +63,13 @@
     "verification"
   ],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=18.20.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.13.0"
+    }
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",

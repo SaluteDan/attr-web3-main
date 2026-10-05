@@ -33,9 +33,6 @@ jobs:
       - name: Compile contracts
         run: npm run compile
 
-      - name: Test artifact copy
-        run: npm run test:build
-
       - name: Build package
         run: npm run build
 
