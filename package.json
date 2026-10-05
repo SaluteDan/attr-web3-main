@@ -31,8 +31,11 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "build:symlink": "node scripts/util/build-symlink.js",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "postbuild": "node scripts/util/copy-artifacts.js",
+    "test:build": "node --test test/build/*.test.js",
+    "check:package": "bash scripts/util/check-package.sh",
     "prepublishOnly": "npm run compile && npm run build",
     "compile": "hardhat compile",
     "test": "hardhat test",

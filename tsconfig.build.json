@@ -8,5 +8,13 @@
     "rootDir": "."
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "artifacts", "cache", "test", "scripts"]
+  "exclude": [
+    "node_modules",
+    "artifacts",
+    "cache",
+    "test",
+    "scripts",
+    "typechain-types",
+    "dist/typechain-types"
+  ]
 }
