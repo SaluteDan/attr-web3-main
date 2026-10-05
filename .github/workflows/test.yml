@@ -33,6 +33,15 @@ jobs:
       - name: Compile contracts
         run: npm run compile
 
+      - name: Test artifact copy
+        run: npm run test:build
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify complete tarball and clean-room import
+        run: npm run check:package
+
       - name: Run unit tests
         run: npm run test:contracts
 

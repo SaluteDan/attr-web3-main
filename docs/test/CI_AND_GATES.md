@@ -14,7 +14,7 @@ two committed baselines (Slither and gas).
 
 | Job | What it runs | Fails the build? |
 | --- | --- | --- |
-| `test` | `compile`, `test:contracts`, `lint:sol` | **Yes** (each step) |
+| `test` | `compile`, `test:build`, `build`, `check:package`, `test:contracts`, `lint:sol` | **Yes** (each step) |
 | `test` (coverage) | `coverage` + Codecov upload | No — informational only (see below) |
 | `slither` | Slither against `slither.config.json`, then the baseline gate | **Yes** (new findings only) |
 
@@ -46,6 +46,31 @@ npm run test:fuzz   # Foundry fuzz (requires forge)
 
 Run `npm run gate` before opening a PR. A red gate at review is an author
 process failure, not a QA fix-up.
+
+### Self-contained package build and release checks
+
+Run `npm run compile && npm run build` to prepare the package. The `postbuild`
+hook deterministically mirrors `artifacts/contracts/**/*.json` into
+`dist/artifacts/contracts/` after TypeScript compilation. It fails when compiled
+contract artifacts are missing or empty; `tsc` alone does not copy JSON. The
+relative imports from `dist/src/index.js` therefore resolve without a local
+Hardhat checkout. Build still removes `dist/` first, so stale TypeChain files
+cannot survive.
+
+Both PR CI and [the publish workflow](../../.github/workflows/publish.yml) run
+`npm run check:package`: require the artifact directory, retain
+`npm pack --dry-run`, assert the real tarball contains all 10 contract JSONs and
+zero TypeChain files, then install it in a temporary consumer directory and
+import `attr-web3`, checking all 10 ABI and bytecode exports. The check does not
+publish anything and disables dependency install scripts. Build-copy regression
+tests run via `npm run test:build`.
+
+Publishing remains a separate, explicitly authorized release: tag/dispatch
+version must equal `package.json`, manual `dry_run` defaults to true, and actual
+publishing uses provenance with the `NPM_TOKEN` secret. These package checks
+do not bump versions or push release tags. To roll back this build/CI change,
+revert its commit through a PR; do not publish from the previous incomplete
+workflow.
 
 ---
 

@@ -68,6 +68,9 @@ jobs:
       - name: Build package
         run: npm run build
 
+      - name: Verify complete tarball and clean-room import
+        run: npm run check:package
+
       # Required gate. Fail-closed: if the contracts test suite fails, the job
       # stops here and nothing is published.
       - name: Run contract tests (release gate)
