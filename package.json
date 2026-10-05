@@ -62,7 +62,7 @@
     "verification"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",
