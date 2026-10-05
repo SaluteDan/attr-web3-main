@@ -48,10 +48,14 @@ jobs:
   publish:
     name: Gate · Verify tag · Publish
     # Release ref guard (fail-closed): publish only from the canonical release
-    # refs — a `v*` tag push, or a manual workflow_dispatch from `main`. A
-    # dispatch from any other branch is skipped entirely (even dry_run), so a
-    # maintainer cannot publish from a non-main branch.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    # refs, and only via the event that is allowed to produce them:
+    #   - a `v*` TAG PUSH (`push` on refs/tags/v*), or
+    #   - a MANUAL workflow_dispatch FROM `main` (refs/heads/main).
+    # The event_name term is load-bearing: a bare ref comparison would also pass
+    # when a manual workflow_dispatch TARGETS a v* tag, which is not a release
+    # path we permit. Anything else — including a dispatch from a non-main
+    # branch — is skipped entirely (even dry_run).
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -82,12 +86,38 @@ jobs:
         run: npm run test:contracts
 
       # Required gate. Keep release parity with test.yml for the fast, cheap
-      # checks. Slither is intentionally NOT duplicated here: it needs a Python
-      # toolchain (pip + solc-select) and several minutes, and any release ref
-      # is a commit on `main`/a `v*` tag whose commit already passed the
-      # `slither` job in test.yml.
+      # checks.
       - name: Lint Solidity (release gate)
         run: npm run lint:sol
+
+      # Required gate. Slither MUST run in this job, not just test.yml: publish
+      # is triggered by a `v*` tag push or a manual dispatch, and NEITHER event
+      # triggers test.yml (which runs only on push [main,develop] and
+      # pull_request [main]). Relying on test.yml would let a release reach
+      # `npm publish` with no Slither result at all. This mirrors the test.yml
+      # `slither` job exactly and FAILS CLOSED on any NEW finding (baselined
+      # findings are tolerated; see slither.baseline.json +
+      # scripts/util/slither-baseline.js).
+      - name: Install Slither
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install slither-analyzer
+          solc-select install 0.8.26
+          solc-select use 0.8.26
+
+      - name: Run Slither (JSON report)
+        run: slither . --config-file slither.config.json --json slither-report.json --fail-none
+
+      - name: Gate against baseline
+        run: node scripts/util/slither-baseline.js
+
+      - name: Upload Slither report
+        if: ${{ always() && hashFiles('slither-report.json') != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: slither-report
+          path: slither-report.json
 
       - name: Resolve expected version
         id: version
