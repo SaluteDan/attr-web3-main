@@ -40,6 +40,11 @@
     "test:fuzz": "forge test",
     "coverage": "hardhat test --coverage",
     "lint:sol": "solhint \"contracts/**/*.sol\"",
+    "gate": "npm run compile && npm run test:contracts && npm run lint:sol",
+    "gas:snapshot": "forge snapshot --no-match-test invariant_SumOfBalancesEqualsSupply",
+    "gas:check": "forge snapshot --no-match-test invariant_SumOfBalancesEqualsSupply --check",
+    "gas:diff": "forge snapshot --no-match-test invariant_SumOfBalancesEqualsSupply --diff",
+    "slither": "slither . --config-file slither.config.json --fail-none",
     "pack:dry-run": "npm pack --dry-run",
     "verify:contract": "node bin/verify-contract.cjs",
     "check:balance": "hardhat run scripts/check/balance.ts",
@@ -57,7 +62,7 @@
     "verification"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",
