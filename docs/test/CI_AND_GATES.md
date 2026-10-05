@@ -22,10 +22,15 @@ Foundry fuzz/invariant tests are **not** a CI job yet — `forge test` is
 currently non-deterministic (see *Known pre-existing issues*). Run it locally
 with `npm run test:fuzz`.
 
-Node is pinned to **22** (`engines.node >= 22.13.0`). Hardhat v3 refuses to run
-on Node 20 (`Please upgrade to Node.js 22.13.0 or later`), so the earlier 20 pin
-broke `npm run compile` in CI. CI never auto-fixes or commits; gates fail
+CI (and repo development) is pinned to **Node 22** via `devEngines.runtime`
+(`>=22.13.0`), `.nvmrc`, and the workflow `node-version` — Hardhat v3 refuses to
+run on Node 20 (`Please upgrade to Node.js 22.13.0 or later`), so the earlier 20
+pin broke `npm run compile` in CI. CI never auto-fixes or commits; gates fail
 loudly.
+
+This is a **dev-only** requirement: the published `engines.node` is relaxed to
+`>=18.20.0` because the runtime surface (`dist/src/index.js`) is plain ESM that
+needs neither Hardhat nor Node 22. See the README's *Runtime requirement* table.
 
 ### Install: `legacy-peer-deps`
 

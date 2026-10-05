@@ -63,7 +63,13 @@
     "verification"
   ],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=18.20.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.13.0"
+    }
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",

@@ -395,8 +395,10 @@ The workflow lives in
 [CI & Quality Gates](./CI_AND_GATES.md) for the gate matrix, the Slither
 baseline, gas snapshots, and the coverage limitation. In short:
 
-- **Node 22** (`>=22.13.0` — Hardhat v3 refuses Node 20), `npm ci`, then `npm run compile`, `npm run test:contracts`,
-  `npm run lint:sol` — each fails the build.
+- **Node 22** for dev/CI (`devEngines` + `.nvmrc`; Hardhat v3 refuses Node 20),
+  `npm ci`, then `npm run compile`, `npm run test:contracts`,
+  `npm run lint:sol` — each fails the build. (The published `engines.node` is
+  lower — `>=18.20.0` — since the runtime surface needs no Hardhat.)
 - A dedicated **Slither** job gates against a committed baseline (new findings
   only).
 - **No Foundry fuzz job runs in CI**: `forge test` is explicitly **excluded**
