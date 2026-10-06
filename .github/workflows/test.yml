@@ -104,6 +104,77 @@ jobs:
           name: slither-report
           path: slither-report.json
 
+  # Gas snapshot — REPORT-ONLY while the signal is unstable (Wave A2, spec
+  # `specs/ci-completion.md` §2.5). Runs ONLY on pull_request into `main`
+  # (never per-push on feature branches): forge snapshot + fuzzing adds ~4min
+  # and is only meaningful at merge review.
+  #
+  # Feasibility [VERIFY] 2026-10-06 (local, forge 1.7.1, this tree):
+  #   run 1: `forge snapshot --check` → exit 1, 12 "Diff in" blocks
+  #   run 2: `forge snapshot --check` → exit 0,  0 "Diff in" blocks
+  #   SAME tree, no edits between runs → the check is NON-DETERMINISTIC here.
+  # Cause: the excluded invariant aside, many entries are fuzz tests whose gas
+  # is reported as μ (mean) / ~ (median); those statistics move run-to-run even
+  # with a fixed fuzz seed, so the committed snapshot cannot be a stable gate.
+  # Therefore enforcement is deliberately NOT wired (Wave C may flip it only
+  # after the signal is stable for two quiet weeks) and EVERY step here is
+  # `continue-on-error` / report-only. The job is still a real CI job: it fails
+  # if the toolchain or the test suite itself breaks (both steps are honest).
+  gas-snapshot:
+    name: Gas snapshot (report-only)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Show Foundry version
+        run: forge --version
+
+      # Fails if the suite itself is broken (a REAL gate — not report-only).
+      # The known-flaky invariant_SumOfBalancesEqualsSupply is excluded via the
+      # repo's existing --no-match-test convention.
+      - name: Run fuzz suite (forge test)
+        run: npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply
+
+      # REPORT-ONLY: writes the diff to the job summary. Never fails the job.
+      - name: Gas diff vs committed snapshot (report-only)
+        id: gasdiff
+        continue-on-error: true
+        run: |
+          set +e
+          {
+            echo "## Gas snapshot — report-only (PR → main)"
+            echo ""
+            echo "Baseline: committed \`.gas-snapshot\`"
+            echo "Command: \`npm run gas:diff\` (forge snapshot --diff, known-flaky invariant excluded)"
+            echo ""
+            echo "**This signal is not yet stable** (see workflow comment); the step is"
+            echo "non-blocking on purpose. Enforcement (Wave C) lands after two quiet weeks."
+            echo ""
+            echo '```text'
+            npm run gas:diff
+            rc=$?
+            echo '```'
+            echo ""
+            echo "_gas:diff exit code: ${rc}_"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Show the same diff in the raw log for quick triage.
+          npm run gas:diff || true
+          exit 0
+
   # NOTE: Foundry fuzz/invariant tests are intentionally NOT a CI job yet.
   # `forge test` currently fails non-deterministically on a pre-existing invalid
   # invariant in test/fuzz/ATTRToken.fuzz.t.sol:

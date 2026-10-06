@@ -41,7 +41,7 @@ NFTCollectionFuzzTest:testFuzz_RoyaltyInfoCorrect(uint256) (runs: 10000, μ: 105
 NFTCollectionFuzzTest:testFuzz_SupplyNeverExceedsMax(uint256) (runs: 10000, μ: 1484305, ~: 1532870)
 NFTCollectionFuzzTest:testFuzz_SupportsInterface(bytes4) (runs: 10000, μ: 399, ~: 399)
 NFTCollectionFuzzTest:testFuzz_TokenIdMonotonic(uint8) (runs: 10000, μ: 842903, ~: 433718)
-NFTCollectionFuzzTest:testFuzz_TokenURISetCorrectly(string) (runs: 10000, μ: 126764, ~: 104510)
+NFTCollectionFuzzTest:testFuzz_TokenURISetCorrectly(string) (runs: 10000, μ: 126841, ~: 104510)
 VestingLockCampaignFactoryFuzzTest:testFuzz_CreateCampaignStoresParams(uint256,uint256,uint256,uint256,uint256,bool) (runs: 10000, μ: 1090886, ~: 1090937)
 VestingLockCampaignFuzzTest:testFuzz_ClaimAfterLockPeriodPaysReward(uint256,uint256) (runs: 10000, μ: 1289176, ~: 1289273)
 VestingLockCampaignFuzzTest:testFuzz_ClaimRewardAndWithdrawPaysRewardAndPrincipal(uint256,uint256) (runs: 10000, μ: 1298792, ~: 1298889)
