@@ -105,9 +105,8 @@ for (const splitterAddress of splitters) {
 
 ## Testing
 
-Run the enhanced tests:
+Run the enhanced tests (the suite lives under `test/contracts/`, run via the repo script):
 
 ```bash
-npx hardhat test test/PaymentSplitter.test.ts
-npx hardhat test test/ATTRDeployer.test.ts
+npm run test:contracts
 ```
