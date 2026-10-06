@@ -59,15 +59,18 @@ reviews:
         contradictions. Do not touch unrelated code.
     - path: "scripts/**"
       instructions: "Deploy/verify script correctness and idempotency."
+  # Tools are nested under `reviews` in the CodeRabbit schema. A top-level
+  # `tools:` key is NOT recognized — it triggered "Unrecognized key: tools" and
+  # was silently ignored. Verified 2026-10-06 against
+  # https://docs.coderabbit.ai/reference/configuration → `reviews.tools`.
+  tools:
+    # NOTE: there is NO `slither` key in the CodeRabbit tools schema — Slither is
+    # THE required contracts gate and stays in CI (.github/workflows/test.yml).
+    # Only vendor-supported security tools are enabled here.
+    semgrep:
+      enabled: true
+    gitleaks:
+      enabled: true
 
 chat:
   auto_reply: true
-
-tools:
-  # NOTE: there is NO `slither` key in the CodeRabbit tools schema — Slither is
-  # THE required contracts gate and stays in CI (.github/workflows/test.yml).
-  # Only vendor-supported security tools are enabled here.
-  semgrep:
-    enabled: true
-  gitleaks:
-    enabled: true
