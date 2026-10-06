@@ -104,32 +104,42 @@ jobs:
           name: slither-report
           path: slither-report.json
 
-  # Gas snapshot — ENFORCING on PR → main (Wave C, spec `specs/ci-completion.md`
-  # §2.5). Runs ONLY on pull_request into `main` (never per-push on feature
-  # branches): forge snapshot + fuzzing adds ~4min and is only meaningful at
-  # merge review.
+  # Gas snapshot — REPORT-ONLY on PR → main (spec `specs/ci-completion.md` §2.5).
+  # Runs ONLY on pull_request into `main` (never per-push on feature branches):
+  # forge snapshot + fuzzing adds ~4min and is only meaningful at merge review.
   #
-  # Determinism [VERIFY] 2026-10-06 (local, forge 1.7.1, this tree):
-  #   `npm run gas:check` run 1 → exit 0, 0 "Diff in" blocks
-  #   `npm run gas:check` run 2 → exit 0, 0 "Diff in" blocks  (SAME tree)
-  #   Raw outputs byte-identical modulo timings. The check IS deterministic
-  #   once (a) the known-broken invariant_SumOfBalancesEqualsSupply is excluded
-  #   via `--no-match-test`, and (b) the fuzz seed is pinned (`--fuzz-seed 0x1`,
-  #   see the `gas:*` scripts in package.json). Without the seed pin the μ/median
-  #   statistics for the `testFuzz_*` entries drifted run-to-run — that was the
-  #   original instability.
-  #   Control: perturbing one `.gas-snapshot` entry makes `--check` exit 1 with a
-  #   "Diff in" block, so the gate provably bites (verified 2026-10-06).
-  # Therefore the gas-check step below is ENFORCING (not report-only): it fails
-  # the job on real drift vs the committed `.gas-snapshot`.
+  # Decision 2026-10-07 (Daniel, supersedes the earlier "ENFORCING / Wave C"
+  # instruction): a BLOCKING gas gate has no place in CI here, because fuzz gas
+  # is NOT deterministic across ENVIRONMENTS. Mutating-fuzz gas statistics
+  # (μ mean / ~ median, printed for the `testFuzz_*` and `invariant_*` entries)
+  # depend on the fuzzer's generated inputs, the forge/solc toolchain, and the
+  # machine — local vs CI disagree even with the same seed pinned. The earlier
+  # local proof of determinism (two consecutive `npm run gas:check` runs on the
+  # SAME machine) was real but too weak: it never established cross-environment
+  # stability, and it cannot, because every entry in `.gas-snapshot` is a
+  # fuzz/invariant test (0 fixed-input entries). A gate built on that would red
+  # CI on unchanged code for reasons a PR author cannot fix.
   #
-  # Correction 2026-10-06 (CodeRabbit Major): an earlier revision of this step ran
-  # `npm run gas:diff` while claiming to be enforcing. `forge snapshot --diff`
-  # only PRINTS a diff and never exits non-zero on drift, so that gate always
-  # passed. The step now runs `npm run gas:check` (`forge snapshot --check`,
-  # which "exits with code 1 if [snapshots] do not match").
+  # Therefore this job is REPORT-ONLY and can NEVER fail the build:
+  #   - the gas step runs `npm run gas:check` ONCE (it prints the diff AND exits
+  #     1 on drift — useful signal we want to SHOW), captures the output + rc,
+  #     prints the SAME output to BOTH the job summary and the raw log, and then
+  #     ALWAYS exits 0 (`continue-on-error: true` AND a trailing `exit 0`, belt
+  #     and braces). The captured rc is still REPORTED in the summary so a reader
+  #     sees "drift detected: exit N" while the step/job still passes.
+  #   - `.gas-snapshot` stays committed as the COMPARISON BASELINE (the
+  #     runner-generated regeneration is fine); a mismatch is fine and expected
+  #     under report-only — it is signal, not a failure.
+  #
+  # What still BLOCKS this job: the `forge test` fuzz-suite step below is a REAL
+  # blocking gate (suite health must still fail the build). Only the gas step is
+  # non-blocking.
+  #
+  # Path to eventual enforcement: a DETERMINISTIC gas benchmark — fixed-input
+  # (non-fuzz) calls with stable gas, no μ/median statistics — tracked as a
+  # follow-up. Until that exists, gas stays reported, never blocking.
   gas-snapshot:
-    name: Gas snapshot (enforcing)
+    name: Gas snapshot (report-only)
     if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
     runs-on: ubuntu-latest
     steps:
@@ -146,10 +156,10 @@ jobs:
         run: npm ci
 
       - name: Install Foundry
-        # Pin the toolchain: the gas gate is ENFORCING, and an unpinned forge/solc
-        # bump can move fuzz gas μ/median statistics and produce false drift reds
-        # on unchanged code. Version matches the local toolchain used to generate
-        # `.gas-snapshot` (see `forge --version` in the PR).
+        # Pin the toolchain: even though the gas step is report-only, an unpinned
+        # forge/solc bump would shuffle fuzz gas μ/median statistics and produce
+        # noisy drift reports. Version matches the local toolchain used to
+        # generate `.gas-snapshot` (see `forge --version` in the PR).
         #
         # Supply-chain integrity (CWE-829): pin the action to a full commit SHA
         # instead of the mutable `@v1` tag, so a tag move cannot silently swap the
@@ -178,41 +188,50 @@ jobs:
       - name: Run fuzz suite (forge test)
         run: npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply
 
-      # ENFORCING (Wave C): determinism verified 2026-10-06 (see workflow comment).
-      # `npm run gas:check` runs `forge snapshot ... --check` ONCE; its output is
-      # captured and printed to BOTH the job summary and the raw log, so the two
-      # can never disagree. `--check` exits 1 when the snapshot does not match, so
-      # a non-zero rc here (real gas drift vs the committed snapshot) fails the
-      # job. (`--diff`, used by an earlier revision, only prints a diff and never
-      # fails — which is why the gate was not actually enforcing before.)
-      - name: Gas check vs committed snapshot (enforcing)
+      # REPORT-ONLY (Daniel, 2026-10-07): fuzz gas is non-deterministic across
+      # environments, so this step must NEVER fail the job. `npm run gas:check`
+      # runs `forge snapshot ... --check` ONCE; it prints the diff AND exits 1 on
+      # drift (signal worth showing), so we capture output + rc, print the SAME
+      # output to BOTH the job summary and the raw log, then ALWAYS exit 0.
+      # Non-blocking is enforced twice (belt and braces): `continue-on-error: true`
+      # on the step AND a trailing `exit 0`. The captured rc is still REPORTED in
+      # the summary ("drift detected: exit N") while the step itself passes.
+      - name: Gas check vs committed snapshot (report-only)
+        continue-on-error: true
         run: |
           set +e
           diff_out="$(npm run gas:check 2>&1)"
           rc=$?
           {
-            echo "## Gas snapshot — enforcing (PR → main)"
+            echo "## Gas snapshot — report-only (PR → main)"
             echo ""
-            echo "Baseline: committed \`.gas-snapshot\`"
+            echo "Baseline: committed \`.gas-snapshot\` (comparison only)"
             echo "Command: \`npm run gas:check\` (forge snapshot --check, fuzz seed pinned, known-flaky invariant excluded)"
             echo ""
-            echo "The gas check is deterministic (two consecutive \`npm run gas:check\` runs on"
-            echo "the same tree both exit 0). This step fails the job on real drift."
+            echo "**This step never fails the build.** Fuzz gas (μ mean / ~ median) is"
+            echo "not deterministic across environments (local vs CI differ), so it"
+            echo "cannot gate. A mismatch vs the committed snapshot is expected here —"
+            echo "it is reported below as a signal, not an error."
+            echo ""
+            echo "- drift detected: **exit ${rc}** (0 = no diff vs baseline, 1 = diff)"
+            echo "- path to eventual enforcement: a deterministic fixed-input (non-fuzz)"
+            echo "  gas benchmark, tracked as a follow-up."
             echo ""
             echo '```text'
             echo "${diff_out}"
             echo '```'
-            echo ""
-            echo "_gas:check exit code: ${rc}_"
           } >> "$GITHUB_STEP_SUMMARY"
           # Print the SAME captured output to the raw log for quick triage.
           echo "${diff_out}"
-          exit "${rc}"
+          echo "_gas:check rc=${rc} (reported only; step is report-only)_"
+          # Always succeed: report-only step must never fail the job.
+          exit 0
 
   # NOTE: Foundry fuzz tests are a BLOCKING gate inside the `gas-snapshot` job
   # above (`npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply`),
   # which runs on PRs into `main` — so suite health IS checked in CI, not only
-  # locally. The smoke test remains scoped: the pre-existing invalid invariant
+  # locally. Only the gas step is report-only; the suite step is a real gate.
+  # The smoke test remains scoped: the pre-existing invalid invariant
   # `invariant_SumOfBalancesEqualsSupply` in test/fuzz/ATTRToken.fuzz.t.sol is
   # still EXCLUDED. It sums a fixed set of holders while the fuzzer moves ATTR
   # directly, so any transfer to an untracked address breaks it; it fails
