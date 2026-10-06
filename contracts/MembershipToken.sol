@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./Errors.sol";
+import "./interfaces/IMintMembership.sol";
 
 /**
  * @title MembershipToken
@@ -16,7 +17,7 @@ import "./Errors.sol";
  *      Replaces the former GovernanceNFT and MembershipToken contracts.
  *      Token IDs start at 0. Public mint via `mintMembership`; admin mint via `adminMintMembership`.
  */
-contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pausable, ReentrancyGuard {
+contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pausable, ReentrancyGuard, IMintMembership {
 
     uint256 private _nextTokenId;
 
