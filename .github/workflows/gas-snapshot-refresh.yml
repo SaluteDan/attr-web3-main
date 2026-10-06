@@ -1,0 +1,62 @@
+name: Gas snapshot refresh (temporary)
+
+# TEMPORARY, manually-dispatched workflow. Purpose: regenerate `.gas-snapshot`
+# in the SAME environment the enforcing gate runs in (ubuntu-latest + pinned
+# Foundry v1.7.1), because the committed baseline was generated on a local host
+# and the runner computes different fuzz gas μ/median statistics. The artifact
+# produced here is downloaded and committed to the branch by hand; this workflow
+# does NOT auto-commit. Remove this file once the baseline is refreshed.
+#
+# Mirrors the toolchain steps of the `gas-snapshot` job in test.yml exactly so
+# the runner env is byte-for-byte the enforcement env.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Regenerate .gas-snapshot on ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
+        with:
+          version: v1.7.1
+
+      - name: Show Foundry version
+        run: forge --version
+
+      - name: Install Foundry dependencies
+        run: forge install foundry-rs/forge-std@v1.16.1 --no-git --shallow
+
+      - name: Regenerate gas snapshot (runner env)
+        run: npm run gas:snapshot
+
+      - name: Show resulting snapshot
+        run: |
+          echo "## .gas-snapshot (runner-generated)"
+          echo '```text'
+          cat .gas-snapshot
+          echo '```'
+
+      - name: Upload .gas-snapshot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-snapshot
+          path: .gas-snapshot
+          if-no-files-found: error
