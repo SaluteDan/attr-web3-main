@@ -1,0 +1,76 @@
+# CodeRabbit configuration — SaluteDan/attr-web3-main (Solidity contracts)
+#
+# ADVISORY ONLY. This tool never gates a merge or a release, and is NEVER a
+# substitute for QA, Slither, the Tier-2 security pass, or a human audit
+# (see specs/coderabbit-adoption-proposal.md §(e)). A green review is NOT a
+# security audit — DISCONFIRM any "all clear". Findings are a pre-QA net only.
+#
+# Per-repo config (not workspace). Schema reference:
+#   https://docs.coderabbit.ai/reference/configuration
+# Verified 2026-10-06 against the current schema; uncertain keys are commented.
+
+language: en-US
+
+reviews:
+  # Enum: quiet | chill | assertive. NOTE: CodeRabbit has NO numeric severity
+  # threshold field, so the proposal's "major+" intent is approximated by the
+  # `assertive` profile + the path_instructions below (flagged to Daniel).
+  profile: assertive
+  # Advisory: never auto-approve, never request changes, never block.
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  poem: false
+  auto_review:
+    enabled: true
+    # Review PRs regardless of base branch ("." + "*" regex matches all).
+    # Harmless here and future-proof; the frontend repo needs it (PRs target
+    # develop/ci/*, not its default branch).
+    base_branches:
+      - ".*"
+  # Review only the diff; ignore generated/build/doc artefacts so unrelated
+  # code is never reviewed.
+  path_filters:
+    - "!dist/**"
+    - "!artifacts/**"
+    - "!cache/**"
+    - "!out/**"
+    - "!foundry-out/**"
+    - "!foundry-cache/**"
+    - "!typechain-types/**"   # stale/dead, untracked — keep out of scope
+    - "!coverage.json"
+    - "!slither-report.json"
+    - "!**/*.lock"
+    - "!package-lock.json"
+    - "!contracts/docs/**"    # docs prose out of scope (proposal)
+    - "!test/fixtures/**"
+  path_instructions:
+    - path: "contracts/**"
+      instructions: >
+        Solidity. Focus on security/correctness ONLY: reentrancy, access
+        control, integer/rounding, signature/replay, proxy/storage layout,
+        cross-contract assumptions, invariant breaks, and breaking ABI changes.
+        Ignore formatting, naming, gas micro-nits, and NatSpec wording.
+        Do NOT report style. A green review is NOT a security audit.
+    - path: ".github/workflows/**"
+      instructions: >
+        CI/release workflow correctness: triggers, guards, ref gating, and
+        whether a publish path can bypass the Slither gate. Flag doc/workflow
+        contradictions. Do not touch unrelated code.
+    - path: "scripts/**"
+      instructions: "Deploy/verify script correctness and idempotency."
+  # Tools are nested under `reviews` in the CodeRabbit schema. A top-level
+  # `tools:` key is NOT recognized — it triggered "Unrecognized key: tools" and
+  # was silently ignored. Verified 2026-10-06 against
+  # https://docs.coderabbit.ai/reference/configuration → `reviews.tools`.
+  tools:
+    # NOTE: there is NO `slither` key in the CodeRabbit tools schema — Slither is
+    # THE required contracts gate and stays in CI (.github/workflows/test.yml).
+    # Only vendor-supported security tools are enabled here.
+    semgrep:
+      enabled: true
+    gitleaks:
+      enabled: true
+
+chat:
+  auto_reply: true
