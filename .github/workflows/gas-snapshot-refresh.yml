@@ -12,6 +12,14 @@ name: Gas snapshot refresh (temporary)
 
 on:
   workflow_dispatch:
+  # `workflow_dispatch` alone requires the workflow file to exist on the default
+  # branch before the API can dispatch it. This temp file lives only on the
+  # feature branch, so a path-scoped `push` trigger on the file itself is used to
+  # fire it once. The path filter prevents any re-trigger loop (this workflow does
+  # not modify itself), and it never runs from real product commits.
+  push:
+    paths:
+      - .github/workflows/gas-snapshot-refresh.yml
 
 permissions:
   contents: read
