@@ -118,10 +118,16 @@ jobs:
   #   see the `gas:*` scripts in package.json). Without the seed pin the μ/median
   #   statistics for the `testFuzz_*` entries drifted run-to-run — that was the
   #   original instability.
-  #   Control: a run that includes the excluded invariant fails deterministically
-  #   (sum mismatch), which is exactly why it stays excluded.
-  # Therefore the gas-diff step below is ENFORCING (not report-only): it fails
+  #   Control: perturbing one `.gas-snapshot` entry makes `--check` exit 1 with a
+  #   "Diff in" block, so the gate provably bites (verified 2026-10-06).
+  # Therefore the gas-check step below is ENFORCING (not report-only): it fails
   # the job on real drift vs the committed `.gas-snapshot`.
+  #
+  # Correction 2026-10-06 (CodeRabbit Major): an earlier revision of this step ran
+  # `npm run gas:diff` while claiming to be enforcing. `forge snapshot --diff`
+  # only PRINTS a diff and never exits non-zero on drift, so that gate always
+  # passed. The step now runs `npm run gas:check` (`forge snapshot --check`,
+  # which "exits with code 1 if [snapshots] do not match").
   gas-snapshot:
     name: Gas snapshot (enforcing)
     if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
@@ -144,7 +150,12 @@ jobs:
         # bump can move fuzz gas μ/median statistics and produce false drift reds
         # on unchanged code. Version matches the local toolchain used to generate
         # `.gas-snapshot` (see `forge --version` in the PR).
-        uses: foundry-rs/foundry-toolchain@v1
+        #
+        # Supply-chain integrity (CWE-829): pin the action to a full commit SHA
+        # instead of the mutable `@v1` tag, so a tag move cannot silently swap the
+        # code that runs in this job. The SHA below is the commit the `v1` tag
+        # currently points at (not a version range that could move).
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
         with:
           version: v1.7.1
 
@@ -168,28 +179,31 @@ jobs:
         run: npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply
 
       # ENFORCING (Wave C): determinism verified 2026-10-06 (see workflow comment).
-      # The gas diff is run ONCE; its output is captured and printed to BOTH the
-      # job summary and the raw log, so the two can never disagree. A non-zero
-      # exit here (real gas drift vs the committed snapshot) fails the job.
-      - name: Gas diff vs committed snapshot (enforcing)
+      # `npm run gas:check` runs `forge snapshot ... --check` ONCE; its output is
+      # captured and printed to BOTH the job summary and the raw log, so the two
+      # can never disagree. `--check` exits 1 when the snapshot does not match, so
+      # a non-zero rc here (real gas drift vs the committed snapshot) fails the
+      # job. (`--diff`, used by an earlier revision, only prints a diff and never
+      # fails — which is why the gate was not actually enforcing before.)
+      - name: Gas check vs committed snapshot (enforcing)
         run: |
           set +e
-          diff_out="$(npm run gas:diff 2>&1)"
+          diff_out="$(npm run gas:check 2>&1)"
           rc=$?
           {
             echo "## Gas snapshot — enforcing (PR → main)"
             echo ""
             echo "Baseline: committed \`.gas-snapshot\`"
-            echo "Command: \`npm run gas:check\` scope (forge snapshot --diff, fuzz seed pinned, known-flaky invariant excluded)"
+            echo "Command: \`npm run gas:check\` (forge snapshot --check, fuzz seed pinned, known-flaky invariant excluded)"
             echo ""
-            echo "The gas diff is deterministic (two consecutive \`npm run gas:check\` runs on"
+            echo "The gas check is deterministic (two consecutive \`npm run gas:check\` runs on"
             echo "the same tree both exit 0). This step fails the job on real drift."
             echo ""
             echo '```text'
             echo "${diff_out}"
             echo '```'
             echo ""
-            echo "_gas:diff exit code: ${rc}_"
+            echo "_gas:check exit code: ${rc}_"
           } >> "$GITHUB_STEP_SUMMARY"
           # Print the SAME captured output to the raw log for quick triage.
           echo "${diff_out}"
