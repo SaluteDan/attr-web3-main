@@ -67,4 +67,7 @@ jobs:
         with:
           name: gas-snapshot
           path: .gas-snapshot
+          # `.gas-snapshot` is a dotfile; upload-artifact v4 strips hidden files
+          # unless this is true (default false → "No files were found").
+          include-hidden-files: true
           if-no-files-found: error
