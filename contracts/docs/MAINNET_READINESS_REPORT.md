@@ -30,7 +30,7 @@ All reviewed contracts are **READY FOR MAINNET DEPLOYMENT** with the following c
 - ✅ Pause mechanisms in place for emergency stops
 - ✅ OpenZeppelin battle-tested implementations
 
-**Note:** MembershipToken.sol updates are **DEFERRED** per user request (reentrancy vulnerability and fund forwarding issues remain).
+**Note:** ~~MembershipToken.sol updates are **DEFERRED** per user request (reentrancy vulnerability and fund forwarding issues remain).~~ **Superseded — see the STALE banner above.** `MembershipToken.withdrawPayments()` now carries `nonReentrant` (`contracts/MembershipToken.sol:218`) and mint forwards funds; the deferral and the reentrancy claim below no longer describe the code.
 
 ---
 
@@ -198,12 +198,12 @@ All reviewed contracts are **READY FOR MAINNET DEPLOYMENT** with the following c
 ### MembershipToken.sol ⚠️ DEFERRED
 
 **Known Issues from Previous Audit:**
-- 🔴 **HIGH:** Reentrancy vulnerability in `withdrawPayments()`
-- 🔴 **HIGH:** Funds not forwarded on mint (accumulate in contract)
+- ~~🔴 **HIGH:** Reentrancy vulnerability in `withdrawPayments()`~~ — **superseded, FALSE:** `withdrawPayments()` is `external onlyOwner nonReentrant` (`contracts/MembershipToken.sol:218`). Slither reports only an Informational `low-level-calls` entry for it.
+- ~~🔴 **HIGH:** Funds not forwarded on mint (accumulate in contract)~~ — **superseded:** mint now forwards payment.
 - ⚠️ **MEDIUM:** No max supply cap
 
-**Status:** **DEFERRED** per user request  
-**Recommendation:** Address before deploying to mainnet
+**Status:** ~~**DEFERRED** per user request~~ **superseded — see the STALE banner above.**  
+**Recommendation:** Re-baseline against the current contract set before any mainnet go/no-go.
 
 ---
 

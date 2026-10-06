@@ -13,3 +13,5 @@ typechain-types/
 broadcast/
 lib/
 *.log
+
+dist/
