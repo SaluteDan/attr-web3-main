@@ -104,11 +104,138 @@ jobs:
           name: slither-report
           path: slither-report.json
 
-  # NOTE: Foundry fuzz/invariant tests are intentionally NOT a CI job yet.
-  # `forge test` currently fails non-deterministically on a pre-existing invalid
-  # invariant in test/fuzz/ATTRToken.fuzz.t.sol:
-  # invariant_SumOfBalancesEqualsSupply() sums a fixed set of holders while the
-  # fuzzer moves ATTR directly, so any transfer to an untracked address breaks
-  # it. Fix the invariant (or scope invariant fuzzing to a handler) before
-  # wiring `forge test` as a required gate. Until then run it locally with
-  # `npm run test:fuzz`.
+  # Gas snapshot — REPORT-ONLY on PR → main (spec `specs/ci-completion.md` §2.5).
+  # Runs ONLY on pull_request into `main` (never per-push on feature branches):
+  # forge snapshot + fuzzing adds ~4min and is only meaningful at merge review.
+  #
+  # Decision 2026-10-07 (Daniel, supersedes the earlier "ENFORCING / Wave C"
+  # instruction): a BLOCKING gas gate has no place in CI here, because fuzz gas
+  # is NOT deterministic across ENVIRONMENTS. Mutating-fuzz gas statistics
+  # (μ mean / ~ median, printed for the `testFuzz_*` and `invariant_*` entries)
+  # depend on the fuzzer's generated inputs, the forge/solc toolchain, and the
+  # machine — local vs CI disagree even with the same seed pinned. The earlier
+  # local proof of determinism (two consecutive `npm run gas:check` runs on the
+  # SAME machine) was real but too weak: it never established cross-environment
+  # stability, and it cannot, because every entry in `.gas-snapshot` is a
+  # fuzz/invariant test (0 fixed-input entries). A gate built on that would red
+  # CI on unchanged code for reasons a PR author cannot fix.
+  #
+  # Therefore this job is REPORT-ONLY and can NEVER fail the build:
+  #   - the gas step runs `npm run gas:check` ONCE (it prints the diff AND exits
+  #     1 on drift — useful signal we want to SHOW), captures the output + rc,
+  #     prints the SAME output to BOTH the job summary and the raw log, and then
+  #     ALWAYS exits 0 (`continue-on-error: true` AND a trailing `exit 0`, belt
+  #     and braces). The captured rc is still REPORTED in the summary so a reader
+  #     sees "drift detected: exit N" while the step/job still passes.
+  #   - `.gas-snapshot` stays committed as the COMPARISON BASELINE (the
+  #     runner-generated regeneration is fine); a mismatch is fine and expected
+  #     under report-only — it is signal, not a failure.
+  #
+  # What still BLOCKS this job: the `forge test` fuzz-suite step below is a REAL
+  # blocking gate (suite health must still fail the build). Only the gas step is
+  # non-blocking.
+  #
+  # Path to eventual enforcement: a DETERMINISTIC gas benchmark — fixed-input
+  # (non-fuzz) calls with stable gas, no μ/median statistics — tracked as a
+  # follow-up. Until that exists, gas stays reported, never blocking.
+  gas-snapshot:
+    name: Gas snapshot (report-only)
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Foundry
+        # Pin the toolchain: even though the gas step is report-only, an unpinned
+        # forge/solc bump would shuffle fuzz gas μ/median statistics and produce
+        # noisy drift reports. Version matches the local toolchain used to
+        # generate `.gas-snapshot` (see `forge --version` in the PR).
+        #
+        # Supply-chain integrity (CWE-829): pin the action to a full commit SHA
+        # instead of the mutable `@v1` tag, so a tag move cannot silently swap the
+        # code that runs in this job. The SHA below is the commit the `v1` tag
+        # currently points at (not a version range that could move).
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09
+        with:
+          version: v1.7.1
+
+      - name: Show Foundry version
+        run: forge --version
+
+      # Foundry dependency install. `lib/` is git-ignored (see .gitignore:14) and
+      # forge-std is NOT a git submodule (no .gitmodules) nor a node_modules
+      # package, so a clean runner has no `forge-std/Test.sol` and `forge test`
+      # fails with Error (6275). The version is pinned to the committed
+      # `foundry.lock` (forge-std v1.16.1) so the dep is deterministic.
+      # This is the ONLY new job that runs forge; the `test`/`slither` jobs do
+      # not invoke Foundry and therefore need no equivalent step.
+      - name: Install Foundry dependencies
+        run: forge install foundry-rs/forge-std@v1.16.1 --no-git --shallow
+
+      # Blocking gate: fails if the suite itself breaks. The known-broken
+      # invariant_SumOfBalancesEqualsSupply is excluded via the repo's existing
+      # --no-match-test convention.
+      - name: Run fuzz suite (forge test)
+        run: npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply
+
+      # REPORT-ONLY (Daniel, 2026-10-07): fuzz gas is non-deterministic across
+      # environments, so this step must NEVER fail the job. `npm run gas:check`
+      # runs `forge snapshot ... --check` ONCE; it prints the diff AND exits 1 on
+      # drift (signal worth showing), so we capture output + rc, print the SAME
+      # output to BOTH the job summary and the raw log, then ALWAYS exit 0.
+      # Non-blocking is enforced twice (belt and braces): `continue-on-error: true`
+      # on the step AND a trailing `exit 0`. The captured rc is still REPORTED in
+      # the summary ("drift detected: exit N") while the step itself passes.
+      - name: Gas check vs committed snapshot (report-only)
+        continue-on-error: true
+        run: |
+          set +e
+          diff_out="$(npm run gas:check 2>&1)"
+          rc=$?
+          {
+            echo "## Gas snapshot — report-only (PR → main)"
+            echo ""
+            echo "Baseline: committed \`.gas-snapshot\` (comparison only)"
+            echo "Command: \`npm run gas:check\` (forge snapshot --check, fuzz seed pinned, known-flaky invariant excluded)"
+            echo ""
+            echo "**This step never fails the build.** Fuzz gas (μ mean / ~ median) is"
+            echo "not deterministic across environments (local vs CI differ), so it"
+            echo "cannot gate. A mismatch vs the committed snapshot is expected here —"
+            echo "it is reported below as a signal, not an error."
+            echo ""
+            echo "- drift detected: **exit ${rc}** (0 = no diff vs baseline, 1 = diff)"
+            echo "- path to eventual enforcement: a deterministic fixed-input (non-fuzz)"
+            echo "  gas benchmark, tracked as a follow-up."
+            echo ""
+            echo '```text'
+            echo "${diff_out}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Print the SAME captured output to the raw log for quick triage.
+          echo "${diff_out}"
+          echo "_gas:check rc=${rc} (reported only; step is report-only)_"
+          # Always succeed: report-only step must never fail the job.
+          exit 0
+
+  # NOTE: Foundry fuzz tests are a BLOCKING gate inside the `gas-snapshot` job
+  # above (`npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply`),
+  # which runs on PRs into `main` — so suite health IS checked in CI, not only
+  # locally. Only the gas step is report-only; the suite step is a real gate.
+  # The smoke test remains scoped: the pre-existing invalid invariant
+  # `invariant_SumOfBalancesEqualsSupply` in test/fuzz/ATTRToken.fuzz.t.sol is
+  # still EXCLUDED. It sums a fixed set of holders while the fuzzer moves ATTR
+  # directly, so any transfer to an untracked address breaks it; it fails
+  # deterministically and would make the gate permanently red. Fix the invariant
+  # (or scope invariant fuzzing to a handler) before removing the exclusion.
+  # Reproduce the full fuzz run locally with `npm run test:fuzz` (add the
+  # --no-match-test exclusion for the same scope CI uses).
