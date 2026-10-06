@@ -140,7 +140,13 @@ jobs:
         run: npm ci
 
       - name: Install Foundry
+        # Pin the toolchain: the gas gate is ENFORCING, and an unpinned forge/solc
+        # bump can move fuzz gas μ/median statistics and produce false drift reds
+        # on unchanged code. Version matches the local toolchain used to generate
+        # `.gas-snapshot` (see `forge --version` in the PR).
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
 
       - name: Show Foundry version
         run: forge --version
