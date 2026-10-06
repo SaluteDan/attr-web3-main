@@ -177,12 +177,15 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         address[] calldata recipients,
         uint256[] calldata tiers,
         string[] calldata metadataURIs
-    ) public onlyOwner whenNotPaused {
+    ) public onlyOwner whenNotPaused nonReentrant {
         if (recipients.length != tiers.length || tiers.length != metadataURIs.length) revert ArrayLengthMismatch();
         if (_nextTokenId + recipients.length > MAX_SUPPLY) revert MaxSupplyExceeded();
 
         for (uint256 i = 0; i < recipients.length; i++) {
             if (recipients[i] == address(0)) revert ZeroAddress();
+            // Re-check the hard cap on every iteration so the invariant holds even
+            // if capacity is consumed mid-loop (e.g. a `_safeMint` callback path).
+            if (_nextTokenId >= MAX_SUPPLY) revert MaxSupplyExceeded();
             uint256 tokenId = _nextTokenId;
             _nextTokenId++;
 

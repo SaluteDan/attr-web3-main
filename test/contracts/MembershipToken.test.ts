@@ -498,6 +498,126 @@ describe("MembershipToken", function () {
         "MaxSupplyExceeded",
       );
     });
+
+    it("Should not exceed MAX_SUPPLY when a contract recipient re-enters the public mint", async function () {
+      // Regression: PR #8 security verdict (finding 8.1). A contract recipient in
+      // an admin batch gets an onERC721Received callback mid-loop and can re-enter
+      // the public mintMembership, consuming extra capacity. The batch must not be
+      // able to push totalSupply() past MAX_SUPPLY.
+      const PRICE = parseEther("0.1");
+      const small = await deployMembership(2n, 2n);
+      await small.write.setTierPrice([1n, PRICE]);
+
+      // Malicious contract that re-enters public mintMembership from its callback.
+      const attacker = await viem.deployContract("ReentrantMintRecipient", [
+        small.address,
+        1n,
+        PRICE,
+      ]);
+      // Prefund so the re-entrant mint can pay the tier price.
+      await owner.sendTransaction({
+        to: attacker.address,
+        value: PRICE,
+      });
+
+      // Batch of length 2 to [attacker, EOA]. Passes the up-front cap check
+      // (0 + 2 > 2 is false) and would previously have minted 3 tokens; the
+      // nonReentrant guard now reverts the whole batch when the callback
+      // re-enters the public mintMembership.
+      await viem.assertions.revertWithCustomError(
+        small.write.adminBatchMintMemberships([
+          [attacker.address, user2.account.address],
+          [1n, 1n],
+          ["ipfs://attack", "ipfs://eoa"],
+        ]),
+        small,
+        "ReentrancyGuardReentrantCall",
+      );
+
+      // Invariant held: the reverted batch left no minted tokens behind and
+      // supply never advanced past the hard cap.
+      expect(await small.read.totalSupply()).to.equal(0n);
+      expect(await small.read.totalSupply()).to.be.lessThanOrEqual(
+        await small.read.MAX_SUPPLY(),
+      );
+    });
+
+    it("Should enforce the per-iteration MAX_SUPPLY re-check (defence in depth)", async function () {
+      // Guards the belt-and-suspenders path: capacity is re-validated on every
+      // loop iteration, not only once up front, so no future code path can
+      // overshoot the cap mid-loop.
+      const small = await deployMembership(3n, 3n);
+      await small.write.adminBatchMintMemberships([
+        [user1.account.address, user2.account.address],
+        [1n, 2n],
+        ["ipfs://1", "ipfs://2"],
+      ]);
+      // One slot remains; a 2-length batch must still revert (up-front check).
+      await viem.assertions.revertWithCustomError(
+        small.write.adminBatchMintMemberships([
+          [user1.account.address, user2.account.address],
+          [1n, 1n],
+          ["ipfs://3", "ipfs://4"],
+        ]),
+        small,
+        "MaxSupplyExceeded",
+      );
+      expect(await small.read.totalSupply()).to.equal(2n);
+    });
+
+    it("Should not exceed MAX_SUPPLY under a re-entrant single admin mint (control)", async function () {
+      // Control assertion: adminMintMembership already re-checks capacity per call
+      // and has no post-callback loop, so its callback path cannot bypass the cap.
+      const PRICE = parseEther("0.1");
+      const small = await deployMembership(2n, 2n);
+      await small.write.setTierPrice([1n, PRICE]);
+
+      const attacker = await viem.deployContract("ReentrantMintRecipient", [
+        small.address,
+        1n,
+        PRICE,
+      ]);
+      await owner.sendTransaction({
+        to: attacker.address,
+        value: PRICE,
+      });
+
+      // The callback re-enters the public mint, consuming the second slot. That
+      // inner call re-checks the cap, so supply lands exactly at the cap (2) and
+      // never past it. (Note: adminMintMembership itself lacks nonReentrant, but
+      // its per-call cap re-check makes the cap unbypassable here.)
+      await small.write.adminMintMembership([
+        attacker.address,
+        1n,
+        "ipfs://admin-attack",
+      ]);
+
+      expect(await small.read.totalSupply()).to.equal(2n);
+      expect(await small.read.totalSupply()).to.be.lessThanOrEqual(
+        await small.read.MAX_SUPPLY(),
+      );
+
+      // Cap reached: any further admin mint must revert and supply stays at cap.
+      await viem.assertions.revertWithCustomError(
+        small.write.adminMintMembership([
+          user2.account.address,
+          1n,
+          "ipfs://over",
+        ]),
+        small,
+        "MaxSupplyExceeded",
+      );
+      await viem.assertions.revertWithCustomError(
+        small.write.adminBatchMintMemberships([
+          [user1.account.address],
+          [1n],
+          ["ipfs://over-batch"],
+        ]),
+        small,
+        "MaxSupplyExceeded",
+      );
+      expect(await small.read.totalSupply()).to.equal(2n);
+    });
   });
 
   // ── Tier Management ───────────────────────────────────────────────────────
