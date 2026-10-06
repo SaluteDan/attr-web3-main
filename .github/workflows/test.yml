@@ -145,6 +145,16 @@ jobs:
       - name: Show Foundry version
         run: forge --version
 
+      # Foundry dependency install. `lib/` is git-ignored (see .gitignore:14) and
+      # forge-std is NOT a git submodule (no .gitmodules) nor a node_modules
+      # package, so a clean runner has no `forge-std/Test.sol` and `forge test`
+      # fails with Error (6275). The version is pinned to the committed
+      # `foundry.lock` (forge-std v1.16.1) so the dep is deterministic.
+      # This is the ONLY new job that runs forge; the `test`/`slither` jobs do
+      # not invoke Foundry and therefore need no equivalent step.
+      - name: Install Foundry dependencies
+        run: forge install foundry-rs/forge-std@v1.16.1 --no-git --shallow
+
       # Blocking gate: fails if the suite itself breaks. The known-broken
       # invariant_SumOfBalancesEqualsSupply is excluded via the repo's existing
       # --no-match-test convention.
