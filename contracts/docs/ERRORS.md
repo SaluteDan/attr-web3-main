@@ -76,22 +76,24 @@ Declared in `Errors.sol` (bottom block) and used by `VestingLockCampaign` / `Ves
 
 | Error | Selector | Used by | Trigger |
 |-------|----------|---------|---------|
-| `InvalidCampaignConfig()` | — | `VestingLockCampaign`, `VestingLockCampaignFactory` | Campaign configuration value is invalid |
-| `InsufficientLockAmount(uint256 required, uint256 supplied)` | — | `VestingLockCampaign` | Lock amount is below the campaign minimum |
-| `CampaignInactive()` | — | `VestingLockCampaign` | Campaign is not currently accepting locks |
-| `PositionAlreadyExists()` | — | `VestingLockCampaign` | Wallet already has a lock position in this campaign |
-| `PositionNotFound()` | — | `VestingLockCampaign` | Wallet does not have a lock position in this campaign |
-| `LockPeriodNotMet()` | — | `VestingLockCampaign` | Wallet lock has not reached the required duration |
-| `ParticipantCapReached()` | — | `VestingLockCampaign` | Campaign has reached its participant cap |
-| `RewardNotClaimable()` | — | `VestingLockCampaign` | Wallet is not eligible to claim the campaign reward |
-| `RewardAlreadyFinalized()` | — | `VestingLockCampaign` | Wallet has already claimed or forfeited the campaign reward |
-| `WithdrawUnavailable()` | — | `VestingLockCampaign` | Locked tokens cannot be withdrawn yet |
+| `InvalidCampaignConfig()` ✅ | — | `VestingLockCampaign`, `VestingLockCampaignFactory` | Campaign configuration value is invalid |
+| `InsufficientLockAmount(uint256 required, uint256 supplied)` ✅ | — | `VestingLockCampaign` | Lock amount is below the campaign minimum |
+| `CampaignInactive()` ⚠️ | — | `VestingLockCampaign` | Campaign is not currently accepting locks |
+| `PositionAlreadyExists()` ✅ | — | `VestingLockCampaign` | Wallet already has a lock position in this campaign |
+| `PositionNotFound()` ⚠️ | — | `VestingLockCampaign` | Wallet does not have a lock position in this campaign |
+| `LockPeriodNotMet()` ⚠️ | — | `VestingLockCampaign` | Wallet lock has not reached the required duration |
+| `ParticipantCapReached()` ⚠️ | — | `VestingLockCampaign` | Campaign has reached its participant cap |
+| `RewardNotClaimable()` ✅ | — | `VestingLockCampaign` | Wallet is not eligible to claim the campaign reward |
+| `RewardAlreadyFinalized()` ⚠️ | — | `VestingLockCampaign` | Wallet has already claimed or forfeited the campaign reward |
+| `WithdrawUnavailable()` ⚠️ | — | `VestingLockCampaign` | Locked tokens cannot be withdrawn yet |
 
 ---
 
 ## Testing
 
-Every error listed above is covered by at least one `revertedWithCustomError` assertion in the Hardhat test suite (`test/contracts/`) and, where applicable, by Foundry fuzz tests (`test/fuzz/`).
+Custom errors annotated **✅ asserted** below are covered by at least one `revertWithCustomError` assertion in the Hardhat test suite (`test/contracts/`); errors annotated **⚠️ not asserted** are declared and used in code but have **no dedicated `revertWithCustomError` test yet** (they are reachable in code but unverified by the suite). Foundry fuzz tests (`test/fuzz/`) cover invariants where applicable, not individual error selectors.
+
+**VestingLockCampaign coverage (verified 2026-10-06 against `test/contracts/VestingLockCampaign.test.ts`):** 4 of the 10 campaign errors have a `revertWithCustomError` assertion; 6 do not. The 6 unasserted errors are listed with ⚠️ below.
 
 To run all tests:
 

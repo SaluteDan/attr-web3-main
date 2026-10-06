@@ -4,7 +4,7 @@
 **Supersedes:** April 17, 2026 review (legacy scope and 128-test count, both now outdated)
 **Review Scope:** ATTRDeployer, ATTRSpender, ATTRToken, NFTCollection, PaymentSplitter, MembershipToken, MembershipSaleSplitter, MembershipFeeDistributor, VestingLockCampaign, VestingLockCampaignFactory
 **Test Results:** 253/253 passing ✅
-**Overall Status:** **READY FOR MAINNET** ✅ (subject to the go-live checklist below)
+**Overall Status:** **READY FOR MAINNET** ✅ (subject to the go-live checklist below; one OPEN P1 contract item — admin-batch reentrancy vs `MAX_SUPPLY`, see §6 — must close first)
 
 ---
 
@@ -19,7 +19,7 @@ All reviewed contracts are **READY FOR MAINNET DEPLOYMENT**:
 - ✅ Comprehensive access control implemented
 - ✅ Pause mechanisms in place for emergency stops
 - ✅ OpenZeppelin battle-tested implementations
-- ✅ **MembershipToken consolidates the membership + governance NFT surface** — all previous MembershipToken deferrals are resolved (see §6)
+- ⚠️ **MembershipToken consolidates the membership + governance NFT surface** — the previously deferred reentrancy/fund-forwarding items are resolved, **but one new item is OPEN:** the `adminBatchMintMemberships` reentrancy gap that can exceed `MAX_SUPPLY` (see §6; fix on a separate P1 PR)
 
 **Governance note:** The legacy governance NFT has been **removed from the codebase and superseded by `MembershipToken`** (tiered membership NFT, ERC721Votes + ERC2981). No legacy governance NFT contract is deployed, imported, or reviewed. Any legacy document still referencing it is out of date.
 
@@ -190,7 +190,7 @@ EXIT=0
 
 ---
 
-### 6. MembershipToken.sol ✅ READY (previously deferred items now resolved)
+### 6. MembershipToken.sol ⚠️ READY EXCEPT ONE OPEN ADMIN-BATCH ITEM
 
 **Role:** "ATTR-MEMBER-ID" — tiered membership NFT with on-chain voting power (ERC721Votes) and ERC2981 royalties. **Consolidates the former governance/membership NFT surface.** Token IDs start at 0; public mint via `mintMembership`, admin mint via `adminMintMembership` / `adminBatchMintMemberships`.
 
@@ -208,7 +208,7 @@ EXIT=0
 |---|------------------|----------|----------------|----------|
 | 1 | **Reentrancy in `withdrawPayments()`** | HIGH | ✅ **RESOLVED** | `withdrawPayments()` is `external onlyOwner nonReentrant`; reads balance, reverts on zero, then single external call. Guarded against re-entry. |
 | 2 | **Funds not forwarded on mint (accumulate in contract)** | HIGH | ✅ **RESOLVED** | `mintMembership()` is `payable nonReentrant whenNotPaused` and **forwards `msg.value` to `paymentReceiver` immediately**. State (`_nextTokenId`, `_mintedCounts`) is incremented **before** the external call (CEI order). |
-| 3 | **No max supply cap** | MEDIUM | ✅ **RESOLVED** | Immutable `MAX_SUPPLY`; `mintMembership`/`adminMintMembership`/`adminBatchMintMemberships` all revert with `MaxSupplyExceeded` at the cap. `MAX_MINT_PER_WALLET` caps the public sale per wallet. |
+| 3 | **No max supply cap** | MEDIUM | ⚠️ **SUPERSEDED (cap added) — but batch path has an OPEN reentrancy gap** | The immutable `MAX_SUPPLY` is set in the constructor (`:26`, `:91`) and enforced in the normal single-mint paths and in `adminMintMembership` (`:159`). **However, `adminBatchMintMemberships` (`contracts/MembershipToken.sol:176-194`) is NOT fully protective:** it has no `nonReentrant` and its loop does not re-check the cap per iteration, so a contract recipient's `onERC721Received` callback can re-enter the public `mintMembership` mid-loop and push `totalSupply()` past `MAX_SUPPLY` (Foundry PoC, `artifacts/hygiene/web3-pr8-security-verdict.md`). **NOT resolved** — the batch cap re-check + `nonReentrant` hardening is being fixed on a separate P1 branch/PR (not this docs PR). This item is **protective but pending the reentrancy fix**; read the cap as enforced in normal paths, not as a closed finding. |
 
 **Additional hardening observed:**
 - ✅ `mintMembership` validates `msg.value >= tierPrices[tier]` and reverts `InsufficientPayment`; overpayment is forwarded, not retained.
@@ -216,7 +216,7 @@ EXIT=0
 - ✅ `receive()` reverts `TransferFailed`, so ETH cannot be stranded by direct sends.
 - ✅ Multi-inheritance overrides for `_update`, `_increaseBalance`, `tokenURI`, `supportsInterface` are correct.
 
-**Residual note:** `_safeMint` runs after the ETH forward; reentrancy is covered by `nonReentrant` (the ERC-721 receiver callback cannot re-enter the guarded functions). No open HIGH/MEDIUM items.
+**Residual note:** `_safeMint` runs after the ETH forward; reentrancy in `mintMembership` is covered by `nonReentrant` (the ERC-721 receiver callback cannot re-enter those guarded functions). **Exception — OPEN item:** `adminBatchMintMemberships` (`contracts/MembershipToken.sol:176-194`) is `onlyOwner whenNotPaused` but **not** `nonReentrant`, and its loop does not re-check `MAX_SUPPLY` after `_safeMint`. A contract recipient in a batch can re-enter the public `mintMembership` from `onERC721Received` and consume extra capacity before the outer loop resumes, exceeding the immutable `MAX_SUPPLY` (reproduced by Foundry PoC; see `artifacts/hygiene/web3-pr8-security-verdict.md`). Severity Low (owner-gated trigger, no fund loss, invariant violation). **Fix in progress on a separate P1 branch/PR — NOT resolved in this PR.**
 
 **Test Coverage:** 52/52 passing ✅
 
@@ -288,18 +288,25 @@ EXIT=0
 - ✅ Gas optimization verified
 - ✅ Access control patterns validated
 - ✅ Pause mechanisms in place
-- ✅ MembershipToken deferrals re-verified and resolved
+- ⚠️ MembershipToken deferrals re-verified; one NEW item OPEN — `adminBatchMintMemberships` reentrancy can exceed `MAX_SUPPLY` (fix on a separate P1 PR)
 
 ### Deployment Process
 1. Deploy `ATTRToken` (capped, roles, pausable)
 2. Deploy `ATTRDeployer` with the backend wallet as owner
 3. Deploy `ATTRSpender` and authorise it in `ATTRDeployer`
-4. Deploy `MembershipToken` (owner = backend wallet) and point `paymentReceiver` at `MembershipSaleSplitter`
-5. Deploy `MembershipSaleSplitter` (70/30) and `MembershipFeeDistributor`
-6. Deploy `VestingLockCampaignFactory`
-7. Deploy PaymentSplitter/NFTCollection instances via `ATTRDeployer`
-8. Verify all contracts on Basescan
-9. Set up monitoring for PaymentSplitter / distributor activity
+4. Deploy `MembershipSaleSplitter` (70/30) — it takes only `treasuryOps` + `liquidityReceiver`, no token prerequisite (`scripts/deploy/membershipSaleSplitter.ts`)
+5. Deploy `MembershipToken` (owner = backend wallet) with `paymentReceiver` = the splitter address from step 4 — the receiver is a **constructor argument** (`scripts/deploy/membershipToken.ts`, env `MEMBERSHIP_PAYMENT_RECEIVER`), so the splitter must already exist
+6. Deploy `MembershipFeeDistributor` — it takes the `MembershipToken` address as a constructor argument (`scripts/deploy/membershipFeeDistributor.ts`, env `MEMBERSHIP_TOKEN_ADDRESS`), so deploy after step 5
+7. Deploy `VestingLockCampaignFactory`
+8. Deploy PaymentSplitter/NFTCollection instances via `ATTRDeployer`
+9. Verify all contracts on Basescan
+10. Set up monitoring for PaymentSplitter / distributor activity
+
+> **Ordering rationale (from the deploy scripts, not the checklist):**
+> - `membershipSaleSplitter.ts` deploys with only `TREASURY_OPS_ADDRESS` / `LIQUIDITY_RECEIVER_ADDRESS` and its output states: *"Deploy MembershipToken with paymentReceiver = this splitter address"*.
+> - `membershipToken.ts` reads `MEMBERSHIP_PAYMENT_RECEIVER` and passes it into the constructor.
+> - `membershipFeeDistributor.ts` requires `MEMBERSHIP_TOKEN_ADDRESS` and aborts if unset (*"Deploy MembershipToken first"*).
+> Hence the correct sequence is **splitter → token → distributor**. (Alternatively, deploy in any order and later call `setPaymentReceiver()`; the checklist describes the straight-line deploy-from-scratch path.)
 
 ### Post-Deployment
 - Set up a CRON job for royalty/fee distribution
@@ -332,7 +339,8 @@ cron.schedule('0 0 * * *', async () => {
 ## Security Recommendations
 
 ### High Priority (Before Mainnet)
-- ✅ All high-priority issues addressed — including the previously deferred MembershipToken reentrancy and fund-forwarding items (now resolved)
+- ✅ The previously deferred MembershipToken reentrancy and fund-forwarding items are resolved
+- ⚠️ **OPEN:** harden `adminBatchMintMemberships` (`contracts/MembershipToken.sol:176-194`) against reentrancy — add `nonReentrant` and a per-iteration `MAX_SUPPLY` re-check so a contract recipient's callback cannot exceed the immutable cap. Tracked on a separate P1 branch/PR (not this docs PR). **Close before mainnet deployment.**
 
 ### Medium Priority (Post-Launch)
 - Consider adding ReentrancyGuard to the remaining contracts (pull-payment splitter already safe)
@@ -374,7 +382,7 @@ The reviewed contracts (ATTRDeployer, ATTRSpender, ATTRToken, NFTCollection, Pay
 - ✅ Additive royalty logic
 - ✅ Proper access control and security measures
 - ✅ Pause mechanisms for emergency stops
-- ✅ MembershipToken resolves all previously deferred membership-vesting items and consolidates governance voting
+- ⚠️ MembershipToken consolidates governance voting and resolves the prior deferrals, **but leaves one OPEN P1 item** (`adminBatchMintMemberships` reentrancy vs `MAX_SUPPLY`; fix on a separate PR)
 - ✅ OpenZeppelin battle-tested implementations
 
 **Next Steps:**
