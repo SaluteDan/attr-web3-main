@@ -162,8 +162,9 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         return tokenId;
     }
 
-    /// @notice Mint with an exact-price, single-use EIP-2612 USDC permit.
-    /// @dev Signer, payer and NFT/grant recipient are msg.sender; no allowance fallback.
+    /// @notice Mint with an exact-price EIP-2612 USDC permit.
+    /// @dev Wraps permit in try/catch so a front-run or pre-submitted permit does not block checkout;
+    ///      safeTransferFrom strictly enforces that sufficient allowance was granted.
     function mintMembershipWithUSDC(uint256 tier, string calldata metadataURI,
         uint256 deadline, uint8 v, bytes32 r, bytes32 s)
         external nonReentrant whenNotPaused returns (uint256)
@@ -172,16 +173,18 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         uint256 price = tierUSDCPrices[tier];
         if (price == 0) revert InvalidTierPrice();
         uint256 tokenId = _reservePublicMint(tier);
-        IERC20Permit(address(usdc)).permit(msg.sender, address(this), price, deadline, v, r, s);
+        try IERC20Permit(address(usdc)).permit(msg.sender, address(this), price, deadline, v, r, s) {} catch {}
         usdc.safeTransferFrom(msg.sender, paymentReceiver, price);
         _completePublicMint(tokenId, tier, metadataURI, address(usdc), price);
         return tokenId;
     }
 
+    /// @notice Validate that tier is 1 or 2; all other tiers revert.
     function _validateTier(uint256 tier) internal pure {
         if (tier != 1 && tier != 2) revert InvalidTier(tier);
     }
 
+    /// @notice Check payment configuration, supply and wallet caps, reserving the next token ID.
     function _reservePublicMint(uint256 tier) internal returns (uint256 tokenId) {
         if (address(attrToken) == address(0)) revert InvalidPaymentToken();
         if (_nextTokenId >= MAX_SUPPLY) revert MaxSupplyExceeded();
@@ -191,6 +194,7 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         tokenTiers[tokenId] = tier;
     }
 
+    /// @notice Complete public mint by minting the NFT and issuing the Day-1 liquid ATTR grant.
     function _completePublicMint(uint256 tokenId, uint256 tier, string memory metadataURI,
         address paymentToken, uint256 price) internal
     {
@@ -268,6 +272,7 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         _queuePrice(tier, price, true);
     }
 
+    /// @notice Internal helper to queue a price update for either ETH or USDC.
     function _queuePrice(uint256 tier, uint256 price, bool isUSDC) internal {
         _validateTier(tier);
         if (price == 0) revert InvalidTierPrice();

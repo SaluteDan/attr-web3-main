@@ -89,12 +89,17 @@ contract QAMembershipTokenTest is Test {
         mintUSDC(1, KEY, 0, deadline, usdc.DOMAIN_SEPARATOR());
         assertEq(membership.ownerOf(0), buyer);
     }
-    function test_ConsumedPermitFailsClosed() public {
+    function test_ConsumedPermitSucceeds() public {
         uint256 deadline = block.timestamp + 1 days;
         (uint8 v, bytes32 r, bytes32 s) = signature(KEY, 0, deadline, USDC_PRICE, usdc.DOMAIN_SEPARATOR());
+        // An observer or front-runner submits the permit directly to USDC
         usdc.permit(buyer, address(membership), USDC_PRICE, deadline, v, r, s);
-        vm.prank(buyer); vm.expectRevert(); membership.mintMembershipWithUSDC(1, "x", deadline, v, r, s);
-        assertEq(usdc.balanceOf(treasury), 0);
+        // Buyer checkout still succeeds because allowance was granted; permit failure is swallowed
+        vm.prank(buyer);
+        membership.mintMembershipWithUSDC(1, "x", deadline, v, r, s);
+        assertEq(usdc.balanceOf(treasury), USDC_PRICE);
+        assertEq(membership.ownerOf(0), buyer);
+        assertEq(attr.balanceOf(buyer), 2500 ether);
     }
     function test_RevokedRoleRollsBackETH() public {
         attr.revokeRole(attr.MINTER_ROLE(), address(membership));

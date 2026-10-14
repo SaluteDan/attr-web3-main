@@ -151,7 +151,7 @@ describe("MembershipToken", function () {
           account: user1.account,
         }),
         usdc,
-        "ERC2612InvalidSigner",
+        "ERC20InsufficientAllowance",
       );
       expect(await membership.read.totalSupply()).to.equal(1n);
     });
@@ -162,7 +162,7 @@ describe("MembershipToken", function () {
           { account: user1.account },
         ),
         usdc,
-        "ERC2612ExpiredSignature",
+        "ERC20InsufficientAllowance",
       );
     });
     it("Should reject wrong signer", async function () {
@@ -171,8 +171,33 @@ describe("MembershipToken", function () {
           account: user1.account,
         }),
         usdc,
-        "ERC2612InvalidSigner",
+        "ERC20InsufficientAllowance",
       );
+    });
+    it("Should succeed if permit was already submitted by a front-runner", async function () {
+      const permit = await signPermit(1n);
+      const [tier, uri, deadline, v, r, s] = permit;
+      const price = await membership.read.tierUSDCPrices([tier]);
+      // Front-runner calls permit directly on USDC
+      await usdc.write.permit([
+        user1.account.address,
+        membership.address,
+        price,
+        deadline,
+        v,
+        r,
+        s,
+      ]);
+      // Buyer checkout still succeeds because allowance was granted
+      await membership.write.mintMembershipWithUSDC(permit, {
+        account: user1.account,
+      });
+      expect(
+        getAddress(await membership.read.ownerOf([0n])),
+      ).to.equal(getAddress(user1.account.address));
+      expect(
+        await usdc.read.balanceOf([paymentReceiver.account.address]),
+      ).to.equal(price);
     });
     it("Should roll back permit and payment when MINTER_ROLE is revoked", async function () {
       await attr.write.revokeRole([
