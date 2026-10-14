@@ -22,7 +22,7 @@ async function deployMembershipToken() {
       contractURI:
         process.env.MEMBERSHIP_CONTRACT_URI || "ipfs://QmYourMetadataHash",
       maxSupply: process.env.MEMBERSHIP_MAX_SUPPLY || "50000",
-      maxMintPerWallet: process.env.MEMBERSHIP_MAX_MINT_PER_WALLET || "5",
+      maxMintPerWallet: process.env.MEMBERSHIP_MAX_MINT_PER_WALLET || "2",
     };
 
     console.log(`📋 Deployment Parameters:`);
@@ -48,6 +48,11 @@ async function deployMembershipToken() {
       BigInt(params.maxMintPerWallet),
     ]);
 
+    // Public checkout fails closed until the grant token and USDC are bound.
+    // The ATTR administrator must grant MINTER_ROLE in a separate authorized step.
+    console.log(
+      "Configure payment tokens and grant ATTR MINTER_ROLE before opening the sale.",
+    );
     const contractAddress = membership.address;
     console.log("✅ MembershipToken deployed to:", contractAddress);
     console.log("");

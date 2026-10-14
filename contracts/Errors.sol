@@ -135,3 +135,16 @@ error RewardAlreadyFinalized();
 
 /// @dev Locked tokens cannot be withdrawn yet. [VestingLockCampaign]
 error WithdrawUnavailable();
+
+/// @dev Membership tiers are exclusively 1 and 2.
+error InvalidTier(uint256 tier);
+/// @dev Membership payment must equal the configured price exactly.
+error ExactPaymentRequired(uint256 required, uint256 sent);
+/// @dev A paid membership price cannot be zero.
+error InvalidTierPrice();
+/// @dev No queued price exists, or its notice period has not elapsed.
+error PriceUpdateNotReady();
+/// @dev Token configuration is missing or not deployed contract code.
+error InvalidPaymentToken();
+/// @dev Payment/grant tokens cannot be replaced after configuration.
+error PaymentTokensAlreadyConfigured();

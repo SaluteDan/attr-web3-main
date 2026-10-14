@@ -31,7 +31,12 @@ All custom errors are declared in [`contracts/Errors.sol`](../Errors.sol) and im
 | `VoucherExpired()` | — | `NFTCollection` | `block.timestamp > voucher.deadline` |
 | `VoucherAlreadyUsed()` | — | `NFTCollection` | Nonce has already been redeemed (replay protection) |
 | `ExactETHRequired(uint256 required, uint256 sent)` | — | `NFTCollection` | `msg.value != basePrice + creatorTip` for an ETH-payment voucher |
-| `InsufficientPayment(uint256 required, uint256 sent)` | — | `MembershipToken` | `msg.value < tierPrices[tier]` on `mintMembership` |
+| `ExactPaymentRequired(uint256 required, uint256 sent)` | — | `MembershipToken` | `msg.value != tierPrices[tier]`, including overpayment |
+| `InvalidTier(uint256 tier)` | — | `MembershipToken` | Tier is not 1 or 2, including admin mint/relabel |
+| `InvalidTierPrice()` | — | `MembershipToken` | Zero paid-tier price |
+| `PriceUpdateNotReady()` | — | `MembershipToken` | No queued price or less than 48 hours notice |
+| `InvalidPaymentToken()` | — | `MembershipToken` | Unconfigured tokens, EOA token address, or non-native USDC on Base |
+| `PaymentTokensAlreadyConfigured()` | — | `MembershipToken` | Attempt to replace bound payment/grant tokens |
 | `TransferFailed()` | — | `MembershipSaleSplitter`, `MembershipToken`, `MembershipFeeDistributor` | Low-level ETH `.call` returned `false` |
 | `NotTokenOwner(uint256 tokenId)` | — | `MembershipFeeDistributor` | Claim caller does not own the supplied token ID |
 

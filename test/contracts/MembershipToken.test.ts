@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import { expect } from "chai";
 import hre from "hardhat";
-import { parseEther, zeroAddress, getAddress } from "viem";
+import { parseEther, zeroAddress, getAddress, hexToSignature } from "viem";
 
 const { viem, networkHelpers } = await hre.network.create();
 
@@ -14,10 +14,14 @@ describe("MembershipToken", function () {
   let royaltyReceiver: typeof owner;
   let user1: typeof owner;
   let user2: typeof owner;
+  let attr: Awaited<ReturnType<typeof viem.deployContract<"ATTRToken">>>;
+  let usdc: Awaited<
+    ReturnType<typeof viem.deployContract<"MockMembershipUSDC">>
+  >;
   let publicClient: Awaited<ReturnType<typeof viem.getPublicClient>>;
 
   const MAX_SUPPLY = 10000n;
-  const MAX_MINT_WALLET = 5n;
+  const MAX_MINT_WALLET = 2n;
   const ROYALTY_FEE = 500n; // 5%
   const CONTRACT_URI = "ipfs://QmCollection";
 
@@ -38,11 +42,156 @@ describe("MembershipToken", function () {
     ]);
   }
 
+  async function setPrice(
+    target: typeof membership,
+    tier: bigint,
+    price: bigint,
+  ) {
+    await target.write.setTierPrice([tier, price]);
+    await networkHelpers.time.increase(48 * 60 * 60);
+    await target.write.executeTierPrice([tier, false]);
+  }
+
   beforeEach(async function () {
     [owner, paymentReceiver, royaltyReceiver, user1, user2] =
       await viem.getWalletClients();
     publicClient = await viem.getPublicClient();
     membership = await deployMembership();
+    attr = await viem.deployContract("ATTRToken", [
+      parseEther("1000000000"),
+      0n,
+      owner.account.address,
+    ]);
+    usdc = await viem.deployContract("MockMembershipUSDC");
+    await membership.write.configurePaymentTokens([attr.address, usdc.address]);
+    await attr.write.grantRole([
+      await attr.read.MINTER_ROLE(),
+      membership.address,
+    ]);
+  });
+
+  async function signPermit(tier: bigint, signer = user1, expired = false) {
+    const deadline = BigInt(
+      (await networkHelpers.time.latest()) + (expired ? -1 : 3600),
+    );
+    const value = await membership.read.tierUSDCPrices([tier]);
+    const nonce = await usdc.read.nonces([user1.account.address]);
+    if (typeof value !== "bigint" || typeof nonce !== "bigint") {
+      throw new TypeError("Permit price and nonce must be bigint");
+    }
+    const signature = await signer.signTypedData({
+      domain: {
+        name: "USD Coin",
+        version: "1",
+        chainId: await publicClient.getChainId(),
+        verifyingContract: usdc.address,
+      },
+      types: {
+        Permit: [
+          { name: "owner", type: "address" },
+          { name: "spender", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+        ],
+      },
+      primaryType: "Permit",
+      message: {
+        owner: user1.account.address,
+        spender: membership.address,
+        value,
+        nonce,
+        deadline,
+      },
+    });
+    const { v, r, s } = hexToSignature(signature);
+    return [tier, "ipfs://permit", deadline, Number(v), r, s] as const;
+  }
+
+  describe("USDC permit integration", function () {
+    beforeEach(async function () {
+      await usdc.write.mint([user1.account.address, 10000n * 10n ** 6n]);
+    });
+    for (const tier of [1n, 2n]) {
+      it(`Should deliver tier ${tier} and liquid ATTR with exact USDC`, async function () {
+        const price = await membership.read.tierUSDCPrices([tier]);
+        await viem.assertions.emitWithArgs(
+          membership.write.mintMembershipWithUSDC(await signPermit(tier), {
+            account: user1.account,
+          }),
+          membership,
+          "WelcomeGrantIssued",
+          [
+            getAddress(user1.account.address),
+            tier,
+            parseEther(tier === 1n ? "2500" : "1000"),
+          ],
+        );
+        expect(
+          await usdc.read.balanceOf([paymentReceiver.account.address]),
+        ).to.equal(price);
+        expect(await attr.read.balanceOf([user1.account.address])).to.equal(
+          parseEther(tier === 1n ? "2500" : "1000"),
+        );
+        expect(
+          await usdc.read.allowance([
+            user1.account.address,
+            membership.address,
+          ]),
+        ).to.equal(0n);
+      });
+    }
+    it("Should reject replay", async function () {
+      const permit = await signPermit(1n);
+      await membership.write.mintMembershipWithUSDC(permit, {
+        account: user1.account,
+      });
+      await viem.assertions.revertWithCustomError(
+        membership.write.mintMembershipWithUSDC(permit, {
+          account: user1.account,
+        }),
+        usdc,
+        "ERC2612InvalidSigner",
+      );
+      expect(await membership.read.totalSupply()).to.equal(1n);
+    });
+    it("Should reject expired permit", async function () {
+      await viem.assertions.revertWithCustomError(
+        membership.write.mintMembershipWithUSDC(
+          await signPermit(1n, user1, true),
+          { account: user1.account },
+        ),
+        usdc,
+        "ERC2612ExpiredSignature",
+      );
+    });
+    it("Should reject wrong signer", async function () {
+      await viem.assertions.revertWithCustomError(
+        membership.write.mintMembershipWithUSDC(await signPermit(1n, user2), {
+          account: user1.account,
+        }),
+        usdc,
+        "ERC2612InvalidSigner",
+      );
+    });
+    it("Should roll back permit and payment when MINTER_ROLE is revoked", async function () {
+      await attr.write.revokeRole([
+        await attr.read.MINTER_ROLE(),
+        membership.address,
+      ]);
+      await viem.assertions.revertWithCustomError(
+        membership.write.mintMembershipWithUSDC(await signPermit(1n), {
+          account: user1.account,
+        }),
+        attr,
+        "AccessControlUnauthorizedAccount",
+      );
+      expect(await usdc.read.nonces([user1.account.address])).to.equal(0n);
+      expect(
+        await usdc.read.balanceOf([paymentReceiver.account.address]),
+      ).to.equal(0n);
+      expect(await membership.read.totalSupply()).to.equal(0n);
+    });
   });
 
   // ── Deployment ────────────────────────────────────────────────────────────
@@ -180,13 +329,18 @@ describe("MembershipToken", function () {
   // ── Tier Pricing ──────────────────────────────────────────────────────────
 
   describe("Tier Pricing", function () {
-    it("Should allow owner to set tier prices", async function () {
-      await viem.assertions.emitWithArgs(
-        membership.write.setTierPrice([1n, parseEther("0.1")]),
-        membership,
-        "TierPriceUpdated",
-        [1n, parseEther("0.1")],
+    it("Should queue prices and execute only after 48h notice", async function () {
+      await membership.write.setTierPrice([1n, parseEther("0.1")]);
+      expect(await membership.read.tierPrices([1n])).to.equal(
+        parseEther("0.225"),
       );
+      await viem.assertions.revertWithCustomError(
+        membership.write.executeTierPrice([1n, false]),
+        membership,
+        "PriceUpdateNotReady",
+      );
+      await networkHelpers.time.increase(48 * 60 * 60);
+      await membership.write.executeTierPrice([1n, false]);
       expect(await membership.read.tierPrices([1n])).to.equal(
         parseEther("0.1"),
       );
@@ -202,18 +356,16 @@ describe("MembershipToken", function () {
       );
     });
 
-    it("Should allow setting multiple tier prices", async function () {
-      await membership.write.setTierPrice([1n, parseEther("0.05")]);
-      await membership.write.setTierPrice([2n, parseEther("0.1")]);
-      await membership.write.setTierPrice([3n, parseEther("0.2")]);
-      expect(await membership.read.tierPrices([1n])).to.equal(
-        parseEther("0.05"),
+    it("Should reject invalid and zero prices", async function () {
+      await viem.assertions.revertWithCustomError(
+        membership.write.setTierPrice([3n, 1n]),
+        membership,
+        "InvalidTier",
       );
-      expect(await membership.read.tierPrices([2n])).to.equal(
-        parseEther("0.1"),
-      );
-      expect(await membership.read.tierPrices([3n])).to.equal(
-        parseEther("0.2"),
+      await viem.assertions.revertWithCustomError(
+        membership.write.setTierPrice([1n, 0n]),
+        membership,
+        "InvalidTierPrice",
       );
     });
   });
@@ -222,8 +374,8 @@ describe("MembershipToken", function () {
 
   describe("Public Minting", function () {
     beforeEach(async function () {
-      await membership.write.setTierPrice([1n, parseEther("0.1")]);
-      await membership.write.setTierPrice([2n, parseEther("0.2")]);
+      await setPrice(membership, 1n, parseEther("0.1"));
+      await setPrice(membership, 2n, parseEther("0.2"));
     });
 
     it("Should mint membership with correct payment", async function () {
@@ -234,7 +386,13 @@ describe("MembershipToken", function () {
         }),
         membership,
         "MembershipMinted",
-        [getAddress(user1.account.address), 0n, 1n, "ipfs://tier1"],
+        [
+          getAddress(user1.account.address),
+          0n,
+          1n,
+          zeroAddress,
+          parseEther("0.1"),
+        ],
       );
 
       expect(await membership.read.ownerOf([0n])).to.equal(
@@ -250,30 +408,32 @@ describe("MembershipToken", function () {
           value: parseEther("0.05"),
         }),
         membership,
-        "InsufficientPayment",
+        "ExactPaymentRequired",
       );
     });
 
-    it("Should allow overpayment (contract forwards all ETH)", async function () {
-      await membership.write.mintMembership([1n, "ipfs://tier1"], {
-        account: user1.account,
-        value: parseEther("0.15"),
-      });
-      expect(await membership.read.ownerOf([0n])).to.equal(
-        getAddress(user1.account.address),
+    it("Should reject overpayment atomically", async function () {
+      await viem.assertions.revertWithCustomError(
+        membership.write.mintMembership([1n, "ipfs://t"], {
+          account: user1.account,
+          value: parseEther("0.15"),
+        }),
+        membership,
+        "ExactPaymentRequired",
       );
+      expect(await membership.read.totalSupply()).to.equal(0n);
     });
-
-    it("Should mint free tier (price = 0)", async function () {
-      await membership.write.setTierPrice([0n, 0n]);
-      await membership.write.mintMembership([0n, "ipfs://free"], {
-        account: user1.account,
+    for (const tier of [0n, 3n, 255n]) {
+      it(`Should reject tier ${tier}`, async function () {
+        await viem.assertions.revertWithCustomError(
+          membership.write.mintMembership([tier, "ipfs://t"], {
+            account: user1.account,
+          }),
+          membership,
+          "InvalidTier",
+        );
       });
-      expect(await membership.read.ownerOf([0n])).to.equal(
-        getAddress(user1.account.address),
-      );
-      expect(await membership.read.getTier([0n])).to.equal(0n);
-    });
+    }
 
     it("Should increment token IDs correctly", async function () {
       await membership.write.mintMembership([1n, "ipfs://token0"], {
@@ -328,7 +488,18 @@ describe("MembershipToken", function () {
 
     it("Should enforce max supply", async function () {
       const small = await deployMembership(1n, 1n);
-      await small.write.setTierPrice([1n, parseEther("0.1")]);
+      await setPrice(small, 1n, parseEther("0.1"));
+      const attr = await viem.deployContract("ATTRToken", [
+        parseEther("1000000000"),
+        0n,
+        owner.account.address,
+      ]);
+      const usdc = await viem.deployContract("MockMembershipUSDC");
+      await small.write.configurePaymentTokens([attr.address, usdc.address]);
+      await attr.write.grantRole([
+        await attr.read.MINTER_ROLE(),
+        small.address,
+      ]);
       await small.write.mintMembership([1n, "ipfs://1"], {
         account: user1.account,
         value: parseEther("0.1"),
@@ -373,7 +544,7 @@ describe("MembershipToken", function () {
         ]),
         membership,
         "MembershipMinted",
-        [getAddress(user1.account.address), 0n, 1n, "ipfs://admin"],
+        [getAddress(user1.account.address), 0n, 1n, zeroAddress, 0n],
       );
       expect(await membership.read.ownerOf([0n])).to.equal(
         getAddress(user1.account.address),
@@ -440,7 +611,7 @@ describe("MembershipToken", function () {
         user2.account.address,
         owner.account.address,
       ] as const;
-      const tiers = [1n, 2n, 3n] as const;
+      const tiers = [1n, 2n, 1n] as const;
       const uris = ["ipfs://t1", "ipfs://t2", "ipfs://t3"] as const;
 
       await membership.write.adminBatchMintMemberships([
@@ -460,7 +631,7 @@ describe("MembershipToken", function () {
       );
       expect(await membership.read.getTier([0n])).to.equal(1n);
       expect(await membership.read.getTier([1n])).to.equal(2n);
-      expect(await membership.read.getTier([2n])).to.equal(3n);
+      expect(await membership.read.getTier([2n])).to.equal(1n);
     });
 
     it("Should reject mismatched array lengths", async function () {
@@ -506,7 +677,7 @@ describe("MembershipToken", function () {
       // able to push totalSupply() past MAX_SUPPLY.
       const PRICE = parseEther("0.1");
       const small = await deployMembership(2n, 2n);
-      await small.write.setTierPrice([1n, PRICE]);
+      await setPrice(small, 1n, PRICE);
 
       // Malicious contract that re-enters public mintMembership from its callback.
       const attacker = await viem.deployContract("ReentrantMintRecipient", [
@@ -546,7 +717,7 @@ describe("MembershipToken", function () {
       // Guards the belt-and-suspenders path: capacity is re-validated on every
       // loop iteration, not only once up front, so no future code path can
       // overshoot the cap mid-loop.
-      const small = await deployMembership(3n, 3n);
+      const small = await deployMembership(3n, 2n);
       await small.write.adminBatchMintMemberships([
         [user1.account.address, user2.account.address],
         [1n, 2n],
@@ -570,7 +741,7 @@ describe("MembershipToken", function () {
       // and has no post-callback loop, so its callback path cannot bypass the cap.
       const PRICE = parseEther("0.1");
       const small = await deployMembership(2n, 2n);
-      await small.write.setTierPrice([1n, PRICE]);
+      await setPrice(small, 1n, PRICE);
 
       const attacker = await viem.deployContract("ReentrantMintRecipient", [
         small.address,
@@ -582,41 +753,16 @@ describe("MembershipToken", function () {
         value: PRICE,
       });
 
-      // The callback re-enters the public mint, consuming the second slot. That
-      // inner call re-checks the cap, so supply lands exactly at the cap (2) and
-      // never past it. (Note: adminMintMembership itself lacks nonReentrant, but
-      // its per-call cap re-check makes the cap unbypassable here.)
-      await small.write.adminMintMembership([
-        attacker.address,
-        1n,
-        "ipfs://admin-attack",
-      ]);
-
-      expect(await small.read.totalSupply()).to.equal(2n);
-      expect(await small.read.totalSupply()).to.be.lessThanOrEqual(
-        await small.read.MAX_SUPPLY(),
-      );
-
-      // Cap reached: any further admin mint must revert and supply stays at cap.
       await viem.assertions.revertWithCustomError(
         small.write.adminMintMembership([
-          user2.account.address,
+          attacker.address,
           1n,
-          "ipfs://over",
+          "ipfs://admin-attack",
         ]),
         small,
-        "MaxSupplyExceeded",
+        "ReentrancyGuardReentrantCall",
       );
-      await viem.assertions.revertWithCustomError(
-        small.write.adminBatchMintMemberships([
-          [user1.account.address],
-          [1n],
-          ["ipfs://over-batch"],
-        ]),
-        small,
-        "MaxSupplyExceeded",
-      );
-      expect(await small.read.totalSupply()).to.equal(2n);
+      expect(await small.read.totalSupply()).to.equal(0n);
     });
   });
 
@@ -758,6 +904,7 @@ describe("MembershipToken", function () {
         [getAddress(owner.account.address)],
       );
       await membership.write.mintMembership([1n, "ipfs://active"], {
+        value: parseEther("0.225"),
         account: user1.account,
       });
       expect(await membership.read.ownerOf([0n])).to.equal(
