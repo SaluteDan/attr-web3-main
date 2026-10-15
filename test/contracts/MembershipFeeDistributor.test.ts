@@ -269,17 +269,34 @@ describe("MembershipFeeDistributor (tier-weighted)", function () {
   // ── Tier resolution & timing ───────────────────────────────────────────────
 
   describe("tier timing", function () {
-    it("samples the tier at claim time (pre-claim upgrade honoured)", async function () {
+    it("does not re-price an open interval on a mid-interval tier change (frozen denominator)", async function () {
       await mintTier(user1, 2);
-      await mintTier(user2, 2); // W = 200
+      await mintTier(user2, 2); // W = 200 at deposit
       await dist.write.depositETH({ value: D });
-      await membership.write.updateTier([0n, 1n]); // token 0 -> T1
+      await membership.write.updateTier([0n, 1n]); // token 0 -> T1 within the open interval
       await warpWindow();
 
+      // F2 (settled): the interval denominator is frozen at deposit and each
+      // extant token's weight basis is frozen for that interval, so a tier
+      // change cannot inflate shares beyond the interval pool.
       const dueUpgraded = await dist.read.claimableETH([[0n]]);
       const duePeer = await dist.read.claimableETH([[1n]]);
-      expect(dueUpgraded > duePeer).to.be.true;
+      expect(dueUpgraded).to.equal(duePeer);
       expect(dueUpgraded + duePeer <= D).to.be.true;
+    });
+
+    it("honours a live tier basis for a token minted after the deposit", async function () {
+      await mintTier(user1, 2);
+      const peer = await viem.deployContract("MockMembershipToken", ["A", "A"]);
+      void peer;
+      await dist.write.depositETH({ value: D }); // freezes token 0's T2 basis
+      // A token minted AFTER the deposit is read live on first touch.
+      await mintTier(user2, 1);
+      await dist.write.depositETH({ value: D });
+      await warpWindow();
+      const dueT1 = await dist.read.claimableETH([[1n]]);
+      const dueT2 = await dist.read.claimableETH([[0n]]);
+      expect(dueT1 > dueT2).to.be.true;
     });
 
     it("does not re-price retroactively after a claim", async function () {

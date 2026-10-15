@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "../interfaces/IMembershipFeeDistributor.sol";
 
 /**
  * @title MockMembershipToken
@@ -26,7 +27,30 @@ contract MockMembershipToken is ERC721 {
     mapping(uint256 => uint256) public tokenTiers;
     uint256 private _nextTokenId;
 
+    /// @notice Registered fee distributor notified on every transfer (0 = none).
+    address public feeDistributor;
+
+    event FeeDistributorSet(address indexed oldDistributor, address indexed newDistributor);
+
     constructor(string memory name_, string memory symbol_) ERC721(name_, symbol_) {}
+
+    // ── Distributor wiring (mirrors production MembershipToken) ───────────────
+
+    /// @notice Register (or clear) the fee distributor notified on transfers.
+    function setFeeDistributor(address distributor) external {
+        address old = feeDistributor;
+        feeDistributor = distributor;
+        emit FeeDistributorSet(old, distributor);
+    }
+
+    /// @dev Transfer hook: settle both holders' accrual via the distributor.
+    function _update(address to, uint256 tokenId, address auth) internal virtual override returns (address) {
+        address from = super._update(to, tokenId, auth);
+        if (feeDistributor != address(0) && from != address(0) && to != address(0) && from != to) {
+            IMembershipFeeDistributor(feeDistributor).checkpoint(tokenId, from, to);
+        }
+        return from;
+    }
 
     // ── Mint / tier admin (test-only) ──────────────────────────────────────────
 

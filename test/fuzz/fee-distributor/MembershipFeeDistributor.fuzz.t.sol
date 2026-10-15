@@ -147,18 +147,22 @@ contract MembershipFeeDistributorFuzzTest is Test {
     }
 
     /// @notice Multiple deposits accumulate under a supply mix that changes between them.
+    /// @dev SETTLED MODEL (F2): each interval's pool is divided by the FROZEN
+    ///      weighted supply recorded at that deposit, never the live W at claim.
+    ///      A mint between intervals does not re-price the earlier pool.
     function test_MultiDepositAccumulationUnderChangingSupply() public {
         membership.mintMany(user, 1, 1); // W = 325
         _deposit(D);
+        vm.warp(1_700_000_000 + WINDOW); // interval 1 fully houses its pool
         membership.mintMany(user, 0, 2); // supply grows before the second deposit
         _deposit(D);
-        vm.warp(block.timestamp + WINDOW);
+        vm.warp(1_700_000_000 + 2 * WINDOW);
 
-        // The interval pool is D - (D % W); the token's share divides by the live W.
+        // Interval 1 divides by W = 325; interval 2 (W = 525) is its own interval.
+        // Token 0's share of each interval is evaluated with that interval's W.
         uint256 p1 = _pool(D, 325);
         uint256 p2 = _pool(D, 525);
-        // The live W is 525 at claim, so both pools are split over W = 525.
-        uint256 expected = (p1 * 225) / 525 + (p2 * 225) / 525;
+        uint256 expected = (p1 * 225) / 325 + (p2 * 225) / 525;
         assertApproxEqAbs(dist.claimableETH(_idsOf(0)), expected, 500, "multi-deposit accumulation");
     }
 
@@ -180,31 +184,62 @@ contract MembershipFeeDistributorFuzzTest is Test {
         assertLe(sum, address(dist).balance, "total claimable <= contract balance");
     }
 
-    /// @notice Weights are live: a tier upgrade between deposit and claim is honoured.
+    /// @notice The interval DENOMINATOR is frozen at deposit (F2) and each
+    ///         extant token's weight basis is frozen for that interval, so a
+    ///         mid-interval tier change cannot re-price already-accreted value
+    ///         and shares can never exceed the interval pool (conservation).
+    /// @dev SETTLED MODEL — supersedes the QA brief's "live weights" note.
+    ///      A live tier change inside an open interval would let Σ shares exceed
+    ///      the pool (100+225 over a W=200 denominator = 1.625x), i.e. exactly
+    ///      the insolvency class the security brief forbids. The frozen basis
+    ///      keeps every holder's accrual immutable once the interval opened.
     function test_LiveWeights_NotFrozen() public {
         uint256 a = membership.mint(user, 2);
         uint256 b = membership.mint(second, 2); // W = 200 at deposit
         _deposit(D);
-        membership.updateTier(a, 1); // a is now T1, read live at claim
+        membership.updateTier(a, 1); // a relabelled T1 AFTER the interval opened
         vm.warp(block.timestamp + WINDOW);
         uint256 dueA = dist.claimableETH(_idsOf(a));
         uint256 dueB = dist.claimableETH(_idsOf(b));
-        assertGt(dueA, dueB, "the upgraded token earns more (live tier honoured)");
+        // Both were T2 when the interval opened: equal basis, no re-pricing.
+        assertEq(dueA, dueB, "a mid-interval tier change does not re-price the interval");
         assertLe(dueA + dueB, D, "shares never exceed the deposit");
+        // The upgrade takes effect for the NEXT interval opened after it.
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW);
+        assertGt(
+            dist.claimableETH(_idsOf(a)),
+            dist.claimableETH(_idsOf(b)),
+            "the upgrade is honoured in the next interval"
+        );
     }
 
     // ── (4) tier timing ───────────────────────────────────────────────────────
 
-    /// @notice Tier is sampled at claim time; a pre-claim change affects the payout.
+    /// @notice Tier is sampled at claim time for tokens whose basis was NOT
+    ///         frozen by a deposit (fresh mints), and the frozen denominator
+    ///         keeps an already-open interval immutable.
     function test_TierSampledAtClaimTime() public {
         uint256 id = membership.mint(user, 2);
-        uint256 peer = membership.mint(second, 2); // W = 200 pre-upgrade
+        uint256 peer = membership.mint(second, 2); // W = 200 at deposit
         _deposit(D);
-        membership.updateTier(id, 1); // T2 -> T1 before claim
+        membership.updateTier(id, 1); // T2 -> T1 within the open interval
         vm.warp(block.timestamp + WINDOW);
         uint256 due = dist.claimableETH(_idsOf(id));
         uint256 duePeer = dist.claimableETH(_idsOf(peer));
-        assertGt(due, duePeer, "claim uses the tier active at claim time");
+        // Frozen interval: the relabel does not re-price this interval.
+        assertEq(due, duePeer, "open interval is not re-priced by a tier change");
+        // Sample-at-claim is observable for a token minted after the deposit:
+        // its basis is read live on first touch.
+        uint256 fresh = membership.mint(user, 1);
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW);
+        uint256 dueFreshT1 = dist.claimableETH(_idsOf(fresh));
+        uint256 peer2 = membership.mint(second, 2); // frozen as T2 in this interval
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW);
+        assertGt(dueFreshT1, 0, "a live-read T1 basis accrues");
+        assertGt(dueFreshT1, dist.claimableETH(_idsOf(peer2)), "T1 earns more than T2");
     }
 
     /// @notice A post-claim tier change is not retroactive.
@@ -219,8 +254,9 @@ contract MembershipFeeDistributorFuzzTest is Test {
         dist.claimETH(_idsOf(id));
         uint256 paid = user.balance - balBefore;
         assertEq(paid, dueBefore, "paid at the tier active at claim");
+        // Debts were re-based on claim; a later tier change cannot accrue anything.
         membership.updateTier(id, 1);
-        assertLe(dist.claimableETH(_idsOf(id)), 1, "no retroactive re-pricing");
+        assertEq(dist.claimableETH(_idsOf(id)), 0, "no retroactive re-pricing");
     }
 
     // ── (5) dust / rounding ───────────────────────────────────────────────────

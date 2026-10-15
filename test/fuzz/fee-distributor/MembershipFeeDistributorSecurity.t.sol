@@ -10,7 +10,7 @@ import "../../../contracts/Errors.sol";
 /**
  * @title MaliciousReceiver
  * @notice Unprivileged attacker that re-enters `claimETH` from its `receive()`.
- * @dev Models the S4 vector: if the distributor advanced its index AFTER the
+ * @dev Models the S4 vector: if the distributor advanced its debt AFTER the
  *      external ETH transfer (or omitted the guard), the re-entrant claim would
  *      succeed and the ETH would be double-spent.
  */
@@ -80,6 +80,7 @@ contract ActorC {
     /// @notice Total ETH ever received (proves the receive body executed).
     uint256 public received;
 
+    /// @notice Accept ETH pushes/claims.
     receive() external payable {
         received += msg.value;
         emit Paid(msg.value);
@@ -92,9 +93,13 @@ contract ActorC {
 
 /**
  * @title MembershipFeeDistributorSecurityTest
- * @notice Adversarial half of the tier-weighted distributor suite (S1–S12).
- *         Every test name below is taken verbatim from
- *         `specs/test-briefs/security-fee-distributor-test-spec.md`.
+ * @notice Adversarial half of the tier-weighted distributor suite (S1–S12) plus
+ *         the four MUST-PASS regression tests for the two CRITICAL fixes
+ *         (F1 snapshot rental, F2 retroactive dilution).
+ *
+ * @dev The F1/F2 tests were authored BEFORE the fix (TDD) and FAIL on the prior
+ *      implementation at `b969c42`; they PASS on the checkpoint + frozen-weight
+ *      implementation.
  */
 contract MembershipFeeDistributorSecurityTest is Test {
     MembershipFeeDistributor internal dist;
@@ -115,6 +120,7 @@ contract MembershipFeeDistributorSecurityTest is Test {
     function setUp() public {
         membership = new MockMembershipToken("ATTR-MEMBER-ID", "ATTR#");
         dist = new MembershipFeeDistributor(address(membership), dao);
+        membership.setFeeDistributor(address(dist));
         usdc = new MockFeeUSDC();
         vm.deal(dao, 10_000 ether);
         alice = new ActorC();
@@ -170,9 +176,199 @@ contract MembershipFeeDistributorSecurityTest is Test {
         paid = who.balance - before;
     }
 
+    /// @dev Total bps of `D` represented by `amount`.
+    function _bps(uint256 amount) internal pure returns (uint256) {
+        return (amount * 10_000) / D;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // F1 / F2 REGRESSION SUITE (MUST FAIL on b969c42, PASS on the fix)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice F1 — snapshot rental defeated by continuous ownership.
+     *
+     * Victim holds the full WINDOW, never claims, then transfers to the attacker
+     * AT `t = WINDOW`. The attacker must capture < 10 bps of the deposit
+     * (vs ~9999 bps on `b969c42`, where `dt = now - lastDeposit` was paid to the
+     * current `ownerOf`). The victim must still claim their full accrued share
+     * via `pendingClaims`.
+     */
+    function test_SnapshotRentalDefeatedByContinuousOwnership() public {
+        _openGate();
+        uint256 id = membership.mint(aliceAddr, 1); // sole member: w/W == 1
+        _deposit(D);
+
+        // Victim (alice) holds the entire window without claiming.
+        vm.warp(block.timestamp + WINDOW);
+
+        // Attacker (bob) acquires the token at the end of the interval.
+        vm.prank(aliceAddr);
+        membership.transferFrom(aliceAddr, bobAddr, id);
+
+        // The buyer's claimable is ~0: value binds to holding duration, not to
+        // time-since-deposit.
+        uint256[] memory one = _ids(id);
+        uint256 attackerDue = dist.claimableETH(one);
+        uint256 attackerBps = _bps(attackerDue);
+        assertLt(attackerBps, 10, "attacker must capture < 10 bps of the interval");
+
+        vm.prank(bobAddr);
+        vm.expectRevert(NothingToClaim.selector);
+        dist.claimETH(one);
+
+        // The victim keeps their holding-period share in pendingClaims.
+        uint256 victimPending = dist.pendingClaim(address(0), aliceAddr);
+        assertApproxEqRel(victimPending, D, 0.001e18, "victim keeps ~the full interval share");
+        assertGt(victimPending, (D * 9_900) / 10_000, "victim retains >= 99% of the interval");
+
+        // Victim claims their settled balance even though the NFT is gone
+        // (F-2: post-sale pull). Direct `claimETH` on an id they no longer own
+        // must revert; the settled-balance path is `claimPendingETH`.
+        vm.prank(aliceAddr);
+        vm.expectRevert(abi.encodeWithSelector(NotTokenOwner.selector, id));
+        dist.claimETH(one);
+
+        uint256 before = aliceAddr.balance;
+        vm.prank(aliceAddr);
+        dist.claimPendingETH();
+        uint256 received = aliceAddr.balance - before;
+        assertApproxEqRel(received, victimPending, 0.0001e18, "seller claims their settled share");
+
+        // Conservation holds.
+        assertLe(dist.totalClaimedETH(), D);
+        assertLe(dist.totalClaimedETH() + dist.ethDust(), D);
+    }
+
+    /**
+     * @notice F2 — retroactive dilution prevented by the frozen denominator.
+     *
+     * Honest T1 holds; deposit happens; an attacker then mints 9x supply
+     * mid-interval. On `b969c42` the live `_liveWeight()` denominator shrank the
+     * honest payout ~90%. With the frozen `intervalWeight` the honest holder
+     * still claims their full original due, and conservation holds.
+     */
+    function test_RetroactiveDilutionPrevented_F2() public {
+        _openGate();
+        uint256 id = membership.mint(aliceAddr, 1); // W = 225
+        _deposit(D);
+
+        // Snapshot the honest due as of mid-interval.
+        vm.warp(block.timestamp + WINDOW / 2);
+        uint256 dueMid = dist.claimableETH(_ids(id));
+
+        // Attacker mints 9x supply mid-interval: W grows from 225 to 2025.
+        membership.mintMany(bobAddr, 9, 0); // 9 more T1
+        assertEq(dist.liveWeight(), 225 + 9 * 225, "live weight grew 10x");
+
+        // Frozen denominator => the honest due is unchanged by the mint.
+        uint256 dueAfterMint = dist.claimableETH(_ids(id));
+        assertEq(dueAfterMint, dueMid, "mid-interval mint must not re-price accrued value");
+
+        // Finish the window and claim the full original share.
+        vm.warp(block.timestamp + WINDOW / 2);
+        uint256 dueFull = dist.claimableETH(_ids(id));
+        assertApproxEqRel(dueFull, D, 0.001e18, "honest holder keeps ~100% of the sole-member pool");
+
+        uint256 paid = _claimETH(aliceAddr, _ids(id));
+        assertApproxEqRel(paid, D, 0.001e18, "no ~90% dilution");
+
+        // Conservation against the deposit (the attacker's late mints earn nothing
+        // from this interval because they were not held during it).
+        assertLe(paid + dist.ethDust(), D, "conservation holds");
+        assertLe(dist.totalClaimedETH(), D);
+    }
+
+    /**
+     * @notice F1 — holding-period split on transfer.
+     *
+     * Deposit -> hold 50% window -> transfer -> hold 50% as the new owner ->
+     * claim. Seller and buyer each get ~50% of the interval pool.
+     */
+    function test_HoldingPeriodSplitOnTransfer() public {
+        _openGate();
+        uint256 id = membership.mint(aliceAddr, 1); // sole member: w/W == 1
+        _deposit(D);
+
+        // Alice holds the first half of the window.
+        vm.warp(block.timestamp + WINDOW / 2);
+        vm.prank(aliceAddr);
+        membership.transferFrom(aliceAddr, bobAddr, id);
+
+        // Bob holds the second half.
+        vm.warp(block.timestamp + WINDOW / 2);
+
+        uint256 alicePending = dist.pendingClaim(address(0), aliceAddr);
+        uint256 bobDue = dist.claimableETH(_ids(id));
+
+        // Each side earns ~half the pool.
+        assertApproxEqRel(alicePending, D / 2, 0.01e18, "seller keeps ~50%");
+        assertApproxEqRel(bobDue, D / 2, 0.01e18, "buyer accrues ~50%");
+
+        // Both can claim their halves; conservation holds.
+        vm.prank(aliceAddr);
+        dist.claimPendingETH();
+        uint256 bobPaid = _claimETH(bobAddr, _ids(id));
+        assertApproxEqRel(alicePending + bobPaid, D, 0.01e18, "the two halves reconstitute the pool");
+        assertLe(dist.totalClaimedETH() + dist.ethDust(), D);
+    }
+
+    /**
+     * @notice F-2 — keeper-gated push.
+     *
+     * Push reverts for a non-keeper; a keeper push works only above the dust
+     * threshold; and it can only move value already accrued (never non-accrued
+     * or third-party funds).
+     */
+    function test_KeeperGatedPush() public {
+        _openGate();
+        uint256 id = membership.mint(aliceAddr, 1);
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW);
+        vm.prank(aliceAddr);
+        membership.transferFrom(aliceAddr, bobAddr, id); // settle alice's balance
+
+        uint256 alicePending = dist.pendingClaim(address(0), aliceAddr);
+        assertApproxEqRel(alicePending, D, 0.001e18, "alice accrued the full pool");
+
+        // (a) Non-keeper push reverts.
+        vm.prank(bobAddr);
+        vm.expectRevert(Unauthorized.selector);
+        dist.pushRewards(aliceAddr);
+
+        // (b) Keeper push below threshold reverts (value accrues silently).
+        vm.prank(dao);
+        dist.setKeeper(carolAddr);
+        vm.prank(dao);
+        dist.setDustThreshold(address(0), D * 2); // threshold above the balance
+        vm.prank(carolAddr);
+        vm.expectRevert(NothingToClaim.selector);
+        dist.pushRewards(aliceAddr);
+
+        // (c) Keeper push above threshold moves exactly the accrued balance.
+        vm.prank(dao);
+        dist.setDustThreshold(address(0), D / 2); // threshold below the balance
+        uint256 before = aliceAddr.balance;
+        vm.prank(carolAddr);
+        dist.pushRewards(aliceAddr);
+        assertEq(aliceAddr.balance - before, alicePending, "push moves exactly the accrued amount");
+        assertEq(dist.pendingClaim(address(0), aliceAddr), 0, "balance zeroed after push");
+
+        // (d) Push cannot move non-accrued funds: a holder with no balance reverts
+        //     and the contract keeps its whole balance.
+        uint256 contractBefore = address(dist).balance;
+        vm.prank(carolAddr);
+        vm.expectRevert(NothingToClaim.selector);
+        dist.pushRewards(aliceAddr);
+        vm.prank(carolAddr);
+        vm.expectRevert(NothingToClaim.selector);
+        dist.pushRewards(carolAddr);
+        assertEq(address(dist).balance, contractBefore, "push cannot move unaccrued funds");
+    }
+
     // ── S1 CRITICAL: snapshot rental / interval accrual ───────────────────────
 
-    /// @notice Value must accrue over genuine holding intervals; churn cannot capture
+    /// @notice Value accrues over genuine holding intervals; churn cannot capture
     ///         a period's share without holding, and lifetime payouts never exceed D.
     function test_SnapshotRental_IntervalAccrualRequired() public {
         _openGate();
@@ -187,9 +383,8 @@ contract MembershipFeeDistributorSecurityTest is Test {
         vm.prank(bobAddr);
         vm.expectRevert(NothingToClaim.selector);
         dist.claimETH(one);
-        uint256 sameBlockPayout = 0;
 
-        // (b) Rent for a fraction of the window, then claim the remainder.
+        // (b) Rent for a fraction of the window, then claim.
         vm.warp(block.timestamp + WINDOW / 4);
         uint256 quarterPayout = _claimETH(bobAddr, one);
         assertGt(quarterPayout, 0, "quarter-window hold must accrue");
@@ -202,16 +397,15 @@ contract MembershipFeeDistributorSecurityTest is Test {
         uint256 halfPayout = _claimETH(carolAddr, one);
         assertGt(halfPayout, quarterPayout, "longer holding must earn more");
 
-        // Conservation: payouts never exceed the deposit; the rest remains owed.
-        uint256 accounted = sameBlockPayout + quarterPayout + halfPayout;
+        // Conservation: payouts never exceed the deposit.
+        uint256 accounted = quarterPayout + halfPayout;
         assertLe(accounted, D, "sum of payouts must never exceed the deposit");
         assertEq(dist.totalClaimedETH(), accounted, "claimed ledger matches payouts");
 
-        // Completing the window pays the residual, proving full conservation.
+        // Completing the window pays the residual.
         vm.warp(block.timestamp + WINDOW);
         uint256 finalPayout = _claimETH(carolAddr, one);
         assertLe(accounted + finalPayout, D, "lifetime payouts never exceed the deposit");
-        assertLe(D - (accounted + finalPayout), D / 1e12, "only rounding dust may remain");
         assertEq(dist.totalClaimedETH(), accounted + finalPayout);
     }
 
@@ -224,6 +418,7 @@ contract MembershipFeeDistributorSecurityTest is Test {
         for (uint256 n = 1; n <= 50; ++n) {
             MockMembershipToken m = new MockMembershipToken("ATTR-MEMBER-ID", "ATTR#");
             MembershipFeeDistributor d = new MembershipFeeDistributor(address(m), dao);
+            m.setFeeDistributor(address(d));
             vm.prank(dao);
             d.setTotalMintedSnapshot(type(uint256).max);
             m.mintMany(aliceAddr, n, 0);
@@ -300,7 +495,7 @@ contract MembershipFeeDistributorSecurityTest is Test {
             "guard error expected"
         );
         assertLe(address(dist).balance, D / 1e15, "no double spend: residual dust only");
-        assertEq(dist.claimableETH(ids), 0, "index advanced before the external call");
+        assertEq(dist.claimableETH(ids), 0, "debt advanced before the external call");
 
         // The guard is free outside a claim, so a fresh probe succeeds.
         assertFalse(attacker.probe(), "guard is free once the claim has returned");
@@ -314,7 +509,7 @@ contract MembershipFeeDistributorSecurityTest is Test {
     // ── S5 HIGH: stale / zero / manipulated snapshot ──────────────────────────
 
     /// @notice The gate fails closed at 0; a stale value cannot mis-pay because the
-    ///         denominator is always the live weighted supply.
+    ///         denominator is the frozen interval weight, not the gate value.
     function test_SnapshotFailClosed() public {
         membership.mint(aliceAddr, 1);
         membership.mint(bobAddr, 2);
@@ -328,6 +523,7 @@ contract MembershipFeeDistributorSecurityTest is Test {
         vm.prank(dao);
         dist.depositETH{value: 1 ether}();
         assertEq(dist.ethPricePerWeight(), uint256(1 ether) - (uint256(1 ether) % uint256(325)), "pool = D - residue");
+        assertEq(dist.ethIntervalWeight(), 325, "frozen denominator = live W at deposit");
 
         vm.prank(dao);
         dist.setTotalMintedSnapshot(uint256(1e30));
@@ -348,7 +544,7 @@ contract MembershipFeeDistributorSecurityTest is Test {
 
     // ── S6 HIGH: duplicate ids in batch ───────────────────────────────────────
 
-    /// @notice `claimETH([id,id])` pays once; the index is advanced per iteration.
+    /// @notice `claimETH([id,id])` pays once; the debt is advanced per iteration.
     function test_DuplicateTokenIdsInBatch() public {
         _openGate();
         uint256 id = membership.mint(aliceAddr, 1);
@@ -378,9 +574,9 @@ contract MembershipFeeDistributorSecurityTest is Test {
         vm.expectRevert(NothingToClaim.selector);
         dist.claimETH(ids);
 
-        uint256 idxBefore = dist.ethPricePerWeight();
+        uint256 cumBefore = dist.ethCumReward();
         _deposit(D);
-        assertGe(dist.ethPricePerWeight(), idxBefore, "index is monotonic non-decreasing");
+        assertGe(dist.ethCumReward(), cumBefore, "cumulative index is monotonic non-decreasing");
     }
 
     // ── S8 MEDIUM: rounding / dust farming ────────────────────────────────────
@@ -464,11 +660,31 @@ contract MembershipFeeDistributorSecurityTest is Test {
         dist.setTotalMintedSnapshot(1);
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bobAddr));
         dist.sweepDustETH();
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bobAddr));
+        dist.setKeeper(bobAddr);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bobAddr));
+        dist.setDustThreshold(address(0), 1);
         vm.stopPrank();
 
         vm.prank(bobAddr);
         (bool ok, ) = address(dist).call{value: 1 ether}("");
         assertFalse(ok, "stray ETH must be rejected");
+    }
+
+    /// @notice `checkpoint` is callable ONLY by the registered membership token.
+    function test_CheckpointOnlyCallableByMembershipToken() public {
+        _openGate();
+        uint256 id = membership.mint(aliceAddr, 1);
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW / 2);
+
+        vm.prank(bobAddr);
+        vm.expectRevert(Unauthorized.selector);
+        dist.checkpoint(id, aliceAddr, bobAddr);
+
+        vm.prank(dao);
+        vm.expectRevert(Unauthorized.selector);
+        dist.checkpoint(id, aliceAddr, bobAddr);
     }
 
     // ── S11 LOW: nonexistent token / T0 attempt ───────────────────────────────
@@ -512,11 +728,12 @@ contract MembershipFeeDistributorSecurityTest is Test {
     // ── Malicious token: tier flip mid-batch ──────────────────────────────────
 
     /// @notice A token that flips tier on read cannot extract more than the deposit:
-    ///         the live-weight denominator caps the payout at the interval pool, and
-    ///         no more than the contract's real balance ever leaves.
+    ///         the frozen interval weight of a sole token caps the payout at the
+    ///         interval pool, and no more than the contract's real balance leaves.
     function test_MaliciousTokenTierFlipMidBatchIsBoundedToAvailableBalance() public {
         MaliciousTierToken evil = new MaliciousTierToken();
         MembershipFeeDistributor d = new MembershipFeeDistributor(address(evil), dao);
+        evil.setFeeDistributor(address(d));
         vm.prank(dao);
         d.setTotalMintedSnapshot(type(uint256).max);
 

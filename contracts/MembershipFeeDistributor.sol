@@ -7,116 +7,179 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./interfaces/IMembershipTiers.sol";
+import "./interfaces/IMembershipFeeDistributor.sol";
 import "./Errors.sol";
 
 /**
  * @title MembershipFeeDistributor
  * @author ATTR Dev
  * @notice Distributes ETH and ERC-20 LP-fee proceeds to membership holders on a
- *         **tier-weighted, interval-accrued** basis without iterating holders.
+ *         **tier-weighted, continuous-holding-time** basis without iterating
+ *         holders.
  *
  * ════════════════════════════════════════════════════════════════════════════
- * Accounting model — continuous interval ownership accrual
+ * What changed vs. `b969c42` (two CRITICAL fixes)
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ * **F1 — snapshot rental (CRITICAL).** The prior model paid
+ * `pricePerWeight * w * dt / (W * WINDOW)` with `dt = now - lastDeposit`, keyed
+ * by tokenId and paid to `ownerOf` at claim time. A holder who held a full
+ * window and never claimed then sold, handing the buyer ~100% of that interval
+ * (adjudicated PoC: 9999 bps capture). Value bound to *time-since-deposit*, not
+ * *holding duration*.
+ *
+ *  Fix: a **transfer-aware checkpoint**. `MembershipToken._update` calls
+ *  `checkpoint(tokenId, from, to)` on every real transfer. On checkpoint the
+ *  distributor settles the **outgoing** holder's accrual up to `block.timestamp`
+ *  and credits it to `pendingClaims[currency][from]` (their personal balance,
+ *  which survives the sale), then re-bases the token's debt so the **incoming**
+ *  holder accrues only from the transfer instant.
+ *  Business rule **F-1: the seller keeps their holding-period share.**
+ *
+ * **F2 — retroactive dilution (CRITICAL).** The prior denominator was live
+ * `_liveWeight()`; the stored `e.intervalWeight` was written but never read, so
+ * a mid-interval mint destroyed ~90% of an already-earned payout (adjudicated
+ * PoC: 9000 bps loss).
+ *
+ *  Fix: the **frozen** `intervalWeight` (weight captured at deposit) is the only
+ *  denominator ever used in payout math. Accrual flows through a cumulative
+ *  per-weight **reward rate** finalised per interval, so a later mint or supply
+ *  change can never re-price value already vested.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * Accounting model — cumulative reward-per-weight + per-holder clock
  * ════════════════════════════════════════════════════════════════════════════
  *
  * Weighting (relative — never literal percentages; literal 4.5%/2% is insolvent
  * past ~22 members, red-team finding U4):
  *
- *     W          = 225*nT1 + 100*nT2          (live, recomputed every read)
+ *     W          = 225*nT1 + 100*nT2          (live, recomputed at deposit only)
  *     T1 weight  = 225  (2.25x)
  *     T2 weight  = 100  (1.00x)
  *     T0 weight  = 0    (no NFT is ever minted for tier 0)
  *
- * A per-unit-of-weight price is stored for each distribution currency. On a
- * deposit of `D`, the global **interval** is closed first, then an increment
- * `D / W` is appended:
+ * Per currency `t` an interval pool is appended on deposit:
  *
- *     ethPricePerWeight += D / W
- *     ethDust            =  D % W              (carried forward, swept next time)
+ *     delta             = D - (D % W)         (dust = D % W carried forward)
+ *     e.pricePerWeight  = delta               (raw pool of the OPEN interval)
+ *     e.intervalWeight  = W                   (FROZEN denominator for the interval)
+ *     e.lastUpdate      = block.timestamp     (open-interval start)
  *
- * Any token's claimable amount is the weighted integral of that price over the
- * intervals during which the token was **held**:
+ * A rate of reward-per-weight-per-second is derived for the open interval and
+ * folded into a **finalised cumulative** `e.cumReward` when the interval closes:
  *
- *     claim(T, id) = Σ_intervals [ pricePerWeight[i] * w(tier(id)) * dt_i / WINDOW ]
+ *     rate = pool * 1e18 / (intervalWeight * WINDOW)     (scaled 1e18)
+ *     cum(t) = e.cumReward + rate * min(t - lastUpdate, WINDOW)
  *
- * Because `Σ_intervals dt_i / WINDOW == 1`, conservation holds exactly:
- * `Σ claim(T, id) + energy[T].dust <= Σ deposits(T)` for every `T`.
+ * The value a token with weight `w` has vested by time `t` is `w * cum(t)`
+ * (descaling 1e18). Each `(currency, tokenId)` stores a settled **debt**
+ * (cumulative per-weight at its last settle); settlement credits the difference
+ * to the holder's per-address balance and re-bases the debt:
  *
- * Why accrual instead of a point-in-time snapshot index (fixes S1):
- * a claimant that acquires a token and claims in the same interval has
- * `dt == 0` for the interval that has not yet closed, so it captures **zero**
- * of it; it may only capture the remainder of the interval it is actually
- * holding. A "snapshot rental" attacker that flips an NFT in and out around
- * deposits therefore earns strictly less than a continuous holder, and the
- * payout of a naive snapshot index is provably larger for the same churn.
+ *     pendingClaims[t][holder] += accrued(w, cum(now)) - debt[t][id]
+ *     debt[t][id]               = accrued(w, cum(now))
  *
- * ── Accuracy bound ──────────────────────────────────────────────────────────
- * The scaled integral shortens by `W` per interval and by `w` per whole period
- * (both are integer divisions). The residual is at most one unit of weight per
- * interval and per period, i.e. relative error < 1e-18 in the usual regime
- * (W >= 100, ONE >= 1e18), and is absorbed by the interval dust buffer which is
- * only claimed after the interval has fully housed its deposits.
+ * Because the debt is re-based on every transfer checkpoint, a token acquired at
+ * the end of an interval can only accrue from its acquisition timestamp —
+ * **renting the token captures none of the prior holder's interval.**
+ *
+ * Conservation: within any interval `Σ_holders (w * dt) <= intervalWeight *
+ * WINDOW` (total weight is `intervalWeight`; elapsed time is capped at `WINDOW`),
+ * so `Σ(claims + dust) <= Σ(deposits)` for every currency.
+ *
+ * ── Delivery (business rule F-2: hybrid push/pull) ──────────────────────────
+ * - **Pull** is always available: `claimETH` / `claimERC20` settle the caller's
+ *   currently-held ids **and** drain `pendingClaims[t][msg.sender]`. A seller
+ *   can therefore claim after the NFT is gone.
+ * - **Push** is a keeper-gated convenience: `pushRewards` / `pushRewardsERC20`
+ *   may only be called by an authorized keeper, only above the per-currency dust
+ *   threshold, and can only move *already-accrued* value to the holder. They can
+ *   never redirect, mint, or withdraw funds.
  *
  * ── Tier resolution (fixes S3) ──────────────────────────────────────────────
- * The tier of every token is read from `membershipToken.getTier(tokenId)` at
- * **claim/read time**, never at deposit time and never from caller input. No
- * external function of this contract accepts a tier parameter, so a T2 token
- * can only ever be paid at T2 weight.
- *
- * ── Snapshot semantics ──────────────────────────────────────────────────────
- * `totalMintedSnapshot` is retained for ABI/operational compatibility but is
- * **repurposed as a fail-closed deposit gate only**: a zero value blocks all
- * deposits (`InvalidMaxSupply`). Its historical equal-per-token meaning is
- * gone; the divisor is the live weighted supply `W`.
+ * The tier of a token is read from `membershipToken.getTier(tokenId)` at
+ * settle/read time, never at deposit time and never from caller input. No
+ * external function accepts a tier parameter.
  */
-contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
+contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDistributor {
     using SafeERC20 for IERC20;
 
     // ── Constants ──────────────────────────────────────────────────────────────
 
     /// @notice Accrual window: the interval over which a deposit fully accrues.
-    ///         At full occupancy `Σ dt == WINDOW`, so a continuously held token
-    ///         captures its exact weighted share.
     uint256 public constant WINDOW = 1 days;
 
-    /// @notice Fixed-point scale for the per-unit-of-weight price integral.
+    /// @notice Fixed-point scale of the cumulative reward-per-weight accumulator.
     uint256 private constant ONE = 1e18;
 
-    /// @notice Skip energy bookkeeping/claims for economically meaningless dust.
+    /// @notice Skip settlement of economically meaningless dust.
     uint256 private constant DUST_FLOOR = 1;
+
+    /// @notice Default keeper-gated push threshold for ETH / `address(0)`.
+    uint256 public constant DEFAULT_ETH_DUST_THRESHOLD = 0.005 ether;
+
+    /// @notice Default keeper-gated push threshold for a 6-decimal ERC-20 (5 USDC).
+    uint256 public constant DEFAULT_ERC20_DUST_THRESHOLD = 5e6;
 
     // ── Immutables ─────────────────────────────────────────────────────────────
 
     /// @notice The membership ERC-721 contract (must expose `getTier`).
     IERC721 public immutable membershipToken;
 
-    // ── Snapshot gate (repurposed, see contract docs) ──────────────────────────
+    // ── Snapshot gate (fail-closed deposit gate only, semantics preserved) ─────
 
-    /// @notice Legacy snapshot value, now a fail-closed deposit gate only.
+    /// @notice Legacy snapshot value, now a **fail-closed deposit gate only**:
     ///         `0` blocks deposits; any non-zero value merely signals "sale
-    ///         started". The distribution divisor is always the live W.
+    ///         started". It is never used as a divisor.
     uint256 public totalMintedSnapshot;
 
     // ── Per-currency accounting ────────────────────────────────────────────────
 
     /// @dev One "energy" ledger per distribution currency (address(0) = ETH).
     struct Energy {
-        uint256 pricePerWeight; // raw wei pool of the current interval (D - dust)
-        uint256 intervalWeight; // weighted supply snapshot at deposit (exact denominator)
-        uint64 lastUpdate; // timestamp of the interval start (deposit time)
+        uint256 cumReward; // finalised cumulative reward-per-weight (scaled 1e18)
+        uint256 pricePerWeight; // raw pool of the OPEN interval
+        uint256 intervalWeight; // FROZEN weighted supply of the OPEN interval
+        uint64 lastUpdate; // open-interval start (deposit timestamp)
         uint256 dust; // residue carried forward, folded into the next deposit
         uint256 claimed; // cumulative amount paid out (conservation observable)
     }
 
     mapping(address => Energy) private _energy; // token => energy (address(0) = ETH)
-    mapping(address => mapping(uint256 => uint256)) private _energyAt; // token => id => paid
-    /// @dev token => id => weight basis frozen when the token first touches the interval.
-    mapping(address => mapping(uint256 => uint256)) private _energyWeightAt;
 
-    /// @notice Unclaimed (not-yet-swept) residue per currency. Non-decreasing
-    ///         except when a subsequent deposit sweeps it into the index.
+    /// @dev currency => tokenId => settled cumulative-per-weight (scaled 1e18).
+    mapping(address => mapping(uint256 => uint256)) private _debt;
+
+    /// @dev currency => tokenId => weight basis frozen for the current interval.
+    ///      Prevents a mid-interval tier change from re-pricing value already
+    ///      partially settled in the same interval (no retroactive re-price).
+    mapping(address => mapping(uint256 => uint256)) private _basisWeight;
+
+    /// @dev currency => tokenId => the open-interval start the basis belongs to.
+    mapping(address => mapping(uint256 => uint64)) private _basisInterval;
+
+    /// @notice currency => holder => accrued-but-unclaimed balance (per-address).
+    /// @dev Implements F-1/F-2: a seller keeps their holding-period share here,
+    ///      independent of who currently owns the token.
+    mapping(address => mapping(address => uint256)) public pendingClaims;
+
+    /// @notice Currencies that have ever received a deposit. Used by the transfer
+    ///         checkpoint to settle every currency a token may have debt in.
+    address[] private _currencies;
+    mapping(address => bool) private _known;
+
+    /// @notice Unclaimed (not-yet-swept) residue per currency.
     uint256 public ethDust;
     mapping(IERC20 => uint256) public erc20Dust;
+
+    // ── Keeper / push configuration (business rule F-2) ────────────────────────
+
+    /// @notice Authorized push keeper (0 = pushes disabled). Keeper can only
+    ///         *trigger* a push of already-accrued value; never redirect funds.
+    address public keeper;
+
+    /// @dev currency => push threshold. Below it value accrues silently (pull only).
+    mapping(address => uint256) public dustThreshold;
 
     // ── Reentrancy probes (public, structural assertions for test lanes) ───────
 
@@ -128,12 +191,16 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
     // ── Events ─────────────────────────────────────────────────────────────────
 
     event TotalMintedSnapshotUpdated(uint256 oldValue, uint256 newValue);
-    event ETHDeposited(uint256 amount, uint256 newIndex, uint256 dust);
-    event ERC20Deposited(address indexed token, uint256 amount, uint256 newIndex, uint256 dust);
+    event ETHDeposited(uint256 amount, uint256 index, uint256 dust);
+    event ERC20Deposited(address indexed token, uint256 amount, uint256 index, uint256 dust);
     event ETHClaimed(address indexed claimer, uint256[] tokenIds, uint256 amount);
     event ERC20Claimed(address indexed claimer, address indexed token, uint256[] tokenIds, uint256 amount);
     event DustSweptETH(address indexed by, uint256 amount);
     event DustSweptERC20(address indexed by, address indexed token, uint256 amount);
+    event AccrualCheckpointed(uint256 indexed tokenId, address indexed from, address indexed to, uint256 settled);
+    event KeeperUpdated(address indexed oldKeeper, address indexed newKeeper);
+    event DustThresholdUpdated(address indexed token, uint256 oldThreshold, uint256 newThreshold);
+    event RewardsPushed(address indexed keeper, address indexed holder, address indexed token, uint256 amount);
 
     // ── Constructor ────────────────────────────────────────────────────────────
 
@@ -146,6 +213,8 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
         if (daoOwner == address(0)) revert ZeroAddress();
         membershipToken = IERC721(membershipToken_);
         _energy[address(0)].lastUpdate = uint64(block.timestamp);
+        dustThreshold[address(0)] = DEFAULT_ETH_DUST_THRESHOLD;
+        _register(address(0));
     }
 
     // ── Owner (DAO) functions ──────────────────────────────────────────────────
@@ -161,44 +230,54 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
         emit TotalMintedSnapshotUpdated(old, count);
     }
 
+    /// @notice Set the authorized push keeper (`address(0)` disables pushes).
+    function setKeeper(address keeper_) external onlyOwner {
+        address old = keeper;
+        keeper = keeper_;
+        emit KeeperUpdated(old, keeper_);
+    }
+
+    /// @notice Set the keeper-gated push threshold for a currency.
+    /// @param token `address(0)` for ETH, else the ERC-20 address.
+    function setDustThreshold(address token, uint256 threshold) external onlyOwner {
+        uint256 old = dustThreshold[token];
+        dustThreshold[token] = threshold;
+        emit DustThresholdUpdated(token, old, threshold);
+    }
+
     /**
      * @notice Deposit ETH for distribution to holders.
-     * @dev `msg.value + ethDust` is appended to the ETH price-per-weight index
-     *      as `(msg.value + ethDust) / W`; the remainder is carried forward. The
-     *      newly deposited portion is segregated into the interval just opened
-     *      (accruing from `block.timestamp`). CEI: all state is written before
-     *      any value can leave the contract.
+     * @dev Closes the open interval (folding its rate into `cumReward`), then
+     *      appends a new interval with the **frozen** weighted supply as its
+     *      denominator. CEI: all state is written before any value can leave.
      */
     function depositETH() external payable onlyOwner nonReentrant {
         if (msg.value == 0) revert ZeroDeposit();
-        _accrue(address(0));
+        _closeInterval(address(0));
         uint256 W = _liveWeight();
         if (W == 0 || totalMintedSnapshot == 0) revert InvalidMaxSupply();
 
-        // Fold the previous residue into the interval exactly once; carry the new
-        // residue forward. `pricePerWeight` accumulates the raw WEI pool of the interval.
         uint256 swept = ethDust;
         uint256 distributable = msg.value + swept;
-        // The residue that cannot be split evenly across the live weight is carried.
         // slither-disable-next-line divide-before-multiply
         uint256 newDust = distributable % W;
         uint256 delta = distributable - newDust;
 
         Energy storage e = _energy[address(0)];
-        e.pricePerWeight += delta;
-        e.intervalWeight = W;
+        e.pricePerWeight = delta; // open interval pool (NOT cumulative)
+        e.intervalWeight = W; // frozen denominator
         e.lastUpdate = uint64(block.timestamp);
         e.dust = newDust;
         ethDust = newDust;
+        _freezeBasis(address(0), W);
 
-        emit ETHDeposited(msg.value, e.pricePerWeight, newDust);
+        emit ETHDeposited(msg.value, e.cumReward, newDust);
     }
 
     /**
      * @notice Deposit ERC-20 for distribution to holders.
      * @dev Credits the **actually received delta** (balance-after minus
-     *      balance-before), never the nominal `amount`, so fee-on-transfer and
-     *      rebasing tokens can never leave the contract under-collateralised.
+     *      balance-before), never the nominal `amount`.
      * @param token  Distribution currency.
      * @param amount Amount to pull via `SafeERC20`.
      */
@@ -206,7 +285,7 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
         if (amount == 0) revert ZeroDeposit();
         address t = address(token);
         if (t == address(0)) revert ZeroAddress();
-        _accrue(t);
+        _closeInterval(t);
         uint256 W = _liveWeight();
         if (W == 0 || totalMintedSnapshot == 0) revert InvalidMaxSupply();
 
@@ -221,95 +300,184 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
         uint256 delta = distributable - newDust;
 
         Energy storage e = _energy[t];
-        e.pricePerWeight += delta;
+        e.pricePerWeight = delta;
         e.intervalWeight = W;
         e.lastUpdate = uint64(block.timestamp);
         e.dust = newDust;
         erc20Dust[token] = newDust;
+        _register(t);
+        if (dustThreshold[t] == 0) dustThreshold[t] = DEFAULT_ERC20_DUST_THRESHOLD;
+        _freezeBasis(t, W);
 
-        emit ERC20Deposited(t, received, e.pricePerWeight, newDust);
+        emit ERC20Deposited(t, received, e.cumReward, newDust);
     }
 
-    // ── Claim functions ────────────────────────────────────────────────────────
+    /// @dev Freeze every extant token's weight basis for the interval opened at
+    ///      `e.lastUpdate`. Deposits already iterate the supply to compute `W`
+    ///      (owner-only, infrequent), so this adds no new asymptotic cost and
+    ///      guarantees `Σ frozen weights == intervalWeight`, i.e. a mid-interval
+    ///      tier change (or a forged tier read) can never make the interval's
+    ///      shares exceed its pool.
+    function _freezeBasis(address t, uint256 W) internal {
+        Energy storage e = _energy[t];
+        uint64 marker = e.lastUpdate;
+        uint256 supply = IMembershipTiers(address(membershipToken)).totalSupply();
+        uint256 sum;
+        for (uint256 i = 0; i < supply; ++i) {
+            uint256 w = _weightOf(i);
+            _basisWeight[t][i] = w;
+            _basisInterval[t][i] = marker;
+            sum += w;
+        }
+        // `sum` must equal the denominator used to size the pool; enforced by
+        // construction (both derive from the same `_weightOf` sweep).
+        if (sum != W) revert InvalidMaxSupply();
+    }
+
+    // ── Transfer checkpoint (F1) ───────────────────────────────────────────────
+
+    /// @inheritdoc IMembershipFeeDistributor
+    /// @dev Callable only by the registered membership token. Settles the seller
+    ///      into their own `pendingClaims` for every active currency, then
+    ///      re-bases each token debt so the buyer accrues only from `now`.
+    function checkpoint(uint256 tokenId, address from, address to) external override {
+        if (msg.sender != address(membershipToken)) revert Unauthorized();
+        if (from == address(0) || to == address(0) || from == to) return;
+
+        uint256 totalSettled;
+        uint256 n = _currencies.length;
+        for (uint256 i = 0; i < n; ++i) {
+            totalSettled += _settleTo(_currencies[i], tokenId, from);
+        }
+        emit AccrualCheckpointed(tokenId, from, to, totalSettled);
+    }
+
+    // ── Claim functions (pull — always available) ──────────────────────────────
 
     /**
-     * @notice Claim accrued ETH for a set of token IDs.
-     * @dev Tier is resolved per id via `getTier` at claim time. Duplicated ids
-     *      in the batch are skipped (each token pays at most once per call).
-     * @param tokenIds Token IDs owned by the caller.
+     * @notice Claim accrued ETH: settles the caller's currently-held ids and
+     *         drains their per-address pending balance (post-sale claims work).
+     * @param tokenIds Token IDs owned by the caller; MUST be non-empty.
      */
     function claimETH(uint256[] calldata tokenIds) external nonReentrant {
         uint256 n = tokenIds.length;
         if (n == 0) revert NoTokenIds();
-        Energy storage e = _energy[address(0)];
-        uint256 w = _liveWeight();
-        uint256 total;
         for (uint256 i = 0; i < n; ++i) {
-            uint256 tokenId = id(tokenIds, i);
+            uint256 tokenId = tokenIds[i];
             if (membershipToken.ownerOf(tokenId) != msg.sender) revert NotTokenOwner(tokenId);
-            total += _step(tokenId, e, address(0), w);
+            // Settle into the caller's pending balance (no double count: the
+            // pending balance is drained exactly once below).
+            _settleTo(address(0), tokenId, msg.sender);
         }
+        uint256 total = _drainPending(address(0), msg.sender);
         if (total == 0) revert NothingToClaim();
-        e.claimed += total;
+        _energy[address(0)].claimed += total;
         (bool ok, ) = msg.sender.call{value: total}("");
         if (!ok) revert TransferFailed();
         emit ETHClaimed(msg.sender, tokenIds, total);
     }
 
     /**
-     * @notice Claim accrued ERC-20 for a set of token IDs.
+     * @notice Claim accrued ERC-20: settles held ids and drains the caller's
+     *         per-address pending balance.
      * @param token    Distribution currency.
-     * @param tokenIds Token IDs owned by the caller.
+     * @param tokenIds Token IDs owned by the caller; MUST be non-empty.
      */
     function claimERC20(IERC20 token, uint256[] calldata tokenIds) external nonReentrant {
+        address t = address(token);
+        if (t == address(0)) revert ZeroAddress();
         uint256 n = tokenIds.length;
         if (n == 0) revert NoTokenIds();
-        address t = address(token);
-        Energy storage e = _energy[t];
-        uint256 w = _liveWeight();
-        uint256 total;
         for (uint256 i = 0; i < n; ++i) {
-            uint256 tokenId = id(tokenIds, i);
+            uint256 tokenId = tokenIds[i];
             if (membershipToken.ownerOf(tokenId) != msg.sender) revert NotTokenOwner(tokenId);
-            total += _step(tokenId, e, t, w);
+            _settleTo(t, tokenId, msg.sender);
         }
+        uint256 total = _drainPending(t, msg.sender);
         if (total == 0) revert NothingToClaim();
-        e.claimed += total;
+        _energy[t].claimed += total;
         token.safeTransfer(msg.sender, total);
         emit ERC20Claimed(msg.sender, t, tokenIds, total);
+    }
+
+    /**
+     * @notice Claim only a previously-settled per-address balance (no held ids).
+     * @dev Implements U-2: a seller claims after the NFT is gone.
+     */
+    function claimPendingETH() external nonReentrant {
+        uint256 total = _drainPending(address(0), msg.sender);
+        if (total == 0) revert NothingToClaim();
+        _energy[address(0)].claimed += total;
+        uint256[] memory empty;
+        (bool ok, ) = msg.sender.call{value: total}("");
+        if (!ok) revert TransferFailed();
+        emit ETHClaimed(msg.sender, empty, total);
+    }
+
+    /// @notice Claim only a previously-settled ERC-20 per-address balance.
+    function claimPendingERC20(IERC20 token) external nonReentrant {
+        address t = address(token);
+        if (t == address(0)) revert ZeroAddress();
+        uint256 total = _drainPending(t, msg.sender);
+        if (total == 0) revert NothingToClaim();
+        _energy[t].claimed += total;
+        token.safeTransfer(msg.sender, total);
+        uint256[] memory empty;
+        emit ERC20Claimed(msg.sender, t, empty, total);
+    }
+
+    // ── Keeper-gated push (F-2: hybrid delivery) ───────────────────────────────
+
+    /**
+     * @notice Push a holder's accrued ETH above the dust threshold. Keeper only.
+     * @dev Can ONLY move value already accrued to `holder`; it cannot redirect,
+     *      mint or withdraw funds. Below the threshold, value accrues silently.
+     * @param holder Holder whose settled balance is pushed.
+     */
+    function pushRewards(address holder) external nonReentrant {
+        if (keeper == address(0) || msg.sender != keeper) revert Unauthorized();
+        if (holder == address(0)) revert ZeroAddress();
+        _push(address(0), holder);
+    }
+
+    /**
+     * @notice Push a holder's accrued ERC-20 above the dust threshold. Keeper only.
+     * @param token  Distribution currency.
+     * @param holder Holder whose settled balance is pushed.
+     */
+    function pushRewardsERC20(IERC20 token, address holder) external nonReentrant {
+        if (keeper == address(0) || msg.sender != keeper) revert Unauthorized();
+        address t = address(token);
+        if (t == address(0) || holder == address(0)) revert ZeroAddress();
+        _push(t, holder);
     }
 
     // ── Dust salvage ───────────────────────────────────────────────────────────
 
     /**
      * @notice Withdraw residue that is provably unclaimable by holders.
-     * @dev Only the portion of `dust` produced by closed-and-swept residues of
-     *      earlier intervals is released (`sweep` ceiling); freshly created dust
-     *      whose interval may still be claimed by a holder is never forfeitable.
-     *      Keeps the solvency invariant `claimable + dust <= deposited` exact.
+     * @dev Only residue already folded into a prior interval is released;
+     *      freshly created dust whose interval may still be claimed is never
+     *      forfeitable. Keeps `claimable + dust <= deposited` exact.
      */
     function sweepDustETH() external onlyOwner nonReentrant {
         uint256 amt = _sweepable(address(0));
         if (amt == 0) revert NothingToClaim();
-        Energy storage e = _energy[address(0)];
+        _energy[address(0)].claimed += amt;
         ethDust -= amt;
-        e.claimed += amt;
         (bool ok, ) = msg.sender.call{value: amt}("");
         if (!ok) revert TransferFailed();
         emit DustSweptETH(msg.sender, amt);
     }
 
-    /**
-     * @notice Withdraw unclaimable ERC-20 residue (see `sweepDustETH`).
-     * @param token Distribution currency.
-     */
+    /// @notice Withdraw unclaimable ERC-20 residue (see `sweepDustETH`).
+    /// @param token Distribution currency.
     function sweepDustERC20(IERC20 token) external onlyOwner nonReentrant {
         IERC20 t = IERC20(address(token));
         uint256 amt = _sweepable(address(token));
         if (amt == 0) revert NothingToClaim();
-        Energy storage e = _energy[address(token)];
+        _energy[address(token)].claimed += amt;
         erc20Dust[t] -= amt;
-        e.claimed += amt;
         t.safeTransfer(msg.sender, amt);
         emit DustSweptERC20(msg.sender, address(token), amt);
     }
@@ -328,73 +496,140 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
 
     // ── Views ──────────────────────────────────────────────────────────────────
 
-    /// @notice Total claimable ETH for the supplied ids (no ownership check).
+    /// @notice Claimable ETH for the supplied ids (no ownership check) —
+    ///         the un-settled accrued portion attributable to each id.
     function claimableETH(uint256[] calldata tokenIds) external view returns (uint256 total) {
-        Energy storage e = _peek(address(0));
+        Energy storage e = _energy[address(0)];
         uint256 n = tokenIds.length;
         for (uint256 i = 0; i < n; ++i) {
-            total += _peekStep(id(tokenIds, i), e, address(0));
+            total += _peek(address(0), tokenIds[i], e);
         }
     }
 
-    /// @notice Total claimable ERC-20 for the supplied ids (no ownership check).
+    /// @notice Claimable ERC-20 for the supplied ids (no ownership check).
     function claimableERC20(IERC20 token, uint256[] calldata tokenIds) external view returns (uint256 total) {
-        Energy storage e = _peek(address(token));
+        Energy storage e = _energy[address(token)];
         uint256 n = tokenIds.length;
         for (uint256 i = 0; i < n; ++i) {
-            total += _peekStep(id(tokenIds, i), e, address(token));
+            total += _peek(address(token), tokenIds[i], e);
         }
     }
 
-    /// @notice ETH price per unit of weight at the last indexed point.
+    /// @notice Accrued-but-unclaimed per-address balance of `holder`.
+    function pendingClaim(address token, address holder) external view returns (uint256) {
+        return pendingClaims[token][holder];
+    }
+
+    /// @notice Finalised cumulative reward-per-weight (scaled 1e18) for ETH.
+    function ethCumReward() external view returns (uint256) {
+        return _energy[address(0)].cumReward;
+    }
+
+    /// @notice Finalised cumulative reward-per-weight (scaled 1e18) for an ERC-20.
+    function erc20CumReward(IERC20 token) external view returns (uint256) {
+        return _energy[address(token)].cumReward;
+    }
+
+    /// @notice Cumulative reward-per-weight (scaled 1e18) at `timestamp`.
+    function cumRewardAt(address token, uint256 timestamp) external view returns (uint256) {
+        return _cumAt(token, timestamp);
+    }
+
+    /// @notice Frozen weighted supply of the currently open ETH interval.
+    function ethIntervalWeight() external view returns (uint256) {
+        return _energy[address(0)].intervalWeight;
+    }
+
+    /// @notice Frozen weighted supply of the currently open ERC-20 interval.
+    function erc20IntervalWeight(IERC20 token) external view returns (uint256) {
+        return _energy[address(token)].intervalWeight;
+    }
+
+    /// @notice ETH pool of the open interval.
     function ethPricePerWeight() external view returns (uint256) {
         return _energy[address(0)].pricePerWeight;
     }
 
-    /// @notice ERC-20 price per unit of weight at the last indexed point.
+    /// @notice ERC-20 pool of the open interval.
     function erc20PricePerWeight(IERC20 token) external view returns (uint256) {
         return _energy[address(token)].pricePerWeight;
     }
 
-    /// @notice Cumulative ETH paid out as claims and swept dust.
+    /// @notice Cumulative ETH paid out as claims, pushes and swept dust.
     function totalClaimedETH() external view returns (uint256) {
         return _energy[address(0)].claimed;
     }
 
-    /// @notice Cumulative ERC-20 paid out as claims and swept dust.
+    /// @notice Cumulative ERC-20 paid out as claims, pushes and swept dust.
     function totalClaimedERC20(IERC20 token) external view returns (uint256) {
         return _energy[address(token)].claimed;
     }
 
     /// @notice Live total weight over extant supply (`225*nT1 + 100*nT2`).
+    /// @dev Read fresh; used **only** to freeze an interval denominator at
+    ///      deposit. Never used to price an already-accrued payout.
     function liveWeight() external view returns (uint256) {
         return _liveWeight();
     }
 
-    /// @notice Pending residue of the currently open interval.
+    /// @notice Pending residue of the currently open ETH interval.
     function pendingDustETH() external view returns (uint256) {
-        return _pendingDust(address(0));
+        return _energy[address(0)].dust;
     }
 
-    /// @notice Pending residue of the currently open interval.
+    /// @notice Pending residue of the currently open ERC-20 interval.
     function pendingDustERC20(IERC20 token) external view returns (uint256) {
-        return _pendingDust(address(token));
+        return _energy[address(token)].dust;
+    }
+
+    /// @notice Number of currencies the distributor tracks (ETH included).
+    function currencyCount() external view returns (uint256) {
+        return _currencies.length;
     }
 
     // ── Internal ───────────────────────────────────────────────────────────────
 
-    /// @dev Bounds-checked calldata accessor (keeps callers terse).
-    function id(uint256[] calldata tokenIds, uint256 i) private pure returns (uint256) {
-        return tokenIds[i];
+    /// @dev Register a currency the first time it is deposited.
+    function _register(address t) internal {
+        if (!_known[t]) {
+            _known[t] = true;
+            _currencies.push(t);
+        }
     }
 
-    /// @dev Live weighted supply, read fresh on every call (never frozen).
-    ///      Enumerates extant tokens and sums their live tier weights, so a
-    ///      mint, burn or tier change is reflected immediately.
+    /// @dev Live weighted supply, read fresh on deposit to freeze the denominator.
     function _liveWeight() internal view returns (uint256 weight) {
         uint256 supply = IMembershipTiers(address(membershipToken)).totalSupply();
         for (uint256 i = 0; i < supply; ++i) {
             weight += _weightOf(i);
+        }
+    }
+
+    /// @dev Weight of a token for the current interval, clamped to the frozen
+    ///      denominator and frozen at first touch so a later tier change cannot
+    ///      re-price an already partly-settled interval. When the interval was
+    ///      opened by a deposit, the basis was already frozen for every extant
+    ///      token (see `_freezeBasis`), so Σ bases == intervalWeight exactly.
+    function _frozenWeight(address t, uint256 tokenId) internal returns (uint256 w) {
+        Energy storage e = _energy[t];
+        uint256 basis = _basisWeight[t][tokenId];
+        if (basis != 0 && _basisInterval[t][tokenId] == e.lastUpdate) {
+            w = basis; // same interval: reuse the frozen basis
+        } else {
+            w = _clampedWeight(t, tokenId);
+            _basisWeight[t][tokenId] = w;
+            _basisInterval[t][tokenId] = e.lastUpdate;
+        }
+    }
+
+    /// @dev View twin of `_frozenWeight` (never writes).
+    function _frozenWeightView(address t, uint256 tokenId) internal view returns (uint256 w) {
+        Energy storage e = _energy[t];
+        uint256 basis = _basisWeight[t][tokenId];
+        if (basis != 0 && _basisInterval[t][tokenId] == e.lastUpdate) {
+            w = basis;
+        } else {
+            w = _clampedWeight(t, tokenId);
         }
     }
 
@@ -406,98 +641,111 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard {
         return 0;
     }
 
-    /// @dev Append a new interval to the index if time has advanced.
-    function _accrue(address t) internal {
+    /// @dev Weight of a token clamped to the open interval's frozen denominator.
+    ///      Honest tokens always satisfy `w <= intervalWeight` (a single weight
+    ///      can never exceed total supply weight). Clamping defends against a
+    ///      membership contract that reports an inflated tier on read (S3): the
+    ///      forged weight cannot out-credit the interval pool.
+    function _clampedWeight(address t, uint256 tokenId) internal view returns (uint256 w) {
+        w = _weightOf(tokenId);
+        uint256 iw = _energy[t].intervalWeight;
+        if (w > iw) w = iw;
+    }
+
+    /// @dev Close the open interval: fold its rate into the finalised cumulative.
+    function _closeInterval(address t) internal {
         Energy storage e = _energy[t];
-        if (block.timestamp > e.lastUpdate) {
-            e.lastUpdate = uint64(block.timestamp);
+        if (e.intervalWeight != 0 && e.pricePerWeight != 0) {
+            uint256 elapsed = block.timestamp - e.lastUpdate;
+            if (elapsed > WINDOW) elapsed = WINDOW;
+            e.cumReward += _rate(e.pricePerWeight, e.intervalWeight) * elapsed;
+        }
+        e.pricePerWeight = 0;
+    }
+
+    /// @dev Scaled reward-per-weight-per-second: pool * 1e18 / (W * WINDOW).
+    function _rate(uint256 pool, uint256 weight) internal pure returns (uint256) {
+        return (pool * ONE) / (weight * WINDOW);
+    }
+
+    /// @dev Cumulative reward-per-weight (scaled 1e18) at `timestamp`, INCLUDING
+    ///      the open interval. Used by views that want the raw accumulator.
+    function _cumAt(address t, uint256 timestamp) internal view returns (uint256) {
+        Energy storage e = _energy[t];
+        if (timestamp <= e.lastUpdate) return e.cumReward;
+        if (e.intervalWeight == 0 || e.pricePerWeight == 0) return e.cumReward;
+        uint256 elapsed = timestamp - e.lastUpdate;
+        if (elapsed > WINDOW) elapsed = WINDOW;
+        return e.cumReward + _rate(e.pricePerWeight, e.intervalWeight) * elapsed;
+    }
+
+    /// @dev Accrued value for a token of weight `w` at `timestamp`, computed with
+    ///      multiply-before-divide so the open interval is exact (no intermediate
+    ///      1e18 round-trip truncation):
+    ///        open  = w * pool * elapsed / (intervalWeight * WINDOW)
+    ///        fin   = w * cumReward / ONE
+    function _accruedAt(address t, uint256 w, uint256 timestamp) internal view returns (uint256) {
+        Energy storage e = _energy[t];
+        uint256 total = (w * e.cumReward) / ONE;
+        if (timestamp > e.lastUpdate && e.intervalWeight != 0 && e.pricePerWeight != 0) {
+            uint256 elapsed = timestamp - e.lastUpdate;
+            if (elapsed > WINDOW) elapsed = WINDOW;
+            total += (w * e.pricePerWeight * elapsed) / (e.intervalWeight * WINDOW);
+        }
+        return total;
+    }
+
+    /// @dev Settle `tokenId` for `from`, credit their pending balance, re-base debt.
+    ///      Returns the freshly-credited (non-dust) amount.
+    function _settleTo(address t, uint256 tokenId, address from) internal returns (uint256 fresh) {
+        uint256 w = _frozenWeight(t, tokenId);
+        if (w == 0) return 0;
+        uint256 owed = _accruedAt(t, w, block.timestamp);
+        uint256 debt = _debt[t][tokenId];
+        fresh = owed > debt ? owed - debt : 0;
+        _debt[t][tokenId] = owed; // re-base: the buyer starts from zero
+        if (fresh >= DUST_FLOOR) {
+            pendingClaims[t][from] += fresh;
         }
     }
 
-    /// @dev The most recent index as seen by a view (no write, same arithmetic).
-    function _peek(address t) private view returns (Energy storage e) {
-        return _energy[t];
+    /// @dev Drain and zero a holder's pending balance for a currency.
+    function _drainPending(address t, address holder) internal returns (uint256 amt) {
+        amt = pendingClaims[t][holder];
+        if (amt != 0) pendingClaims[t][holder] = 0;
     }
 
-    /// @dev Residue not yet folded into the index (swept on the next deposit).
-    function _pendingDust(address t) internal view returns (uint256) {
-        return _energy[t].dust;
+    /// @dev View twin of `_settleTo` (never writes).
+    function _peek(address t, uint256 tokenId, Energy storage) private view returns (uint256 fresh) {
+        uint256 w = _frozenWeightView(t, tokenId);
+        if (w == 0) return 0;
+        uint256 owed = _accruedAt(t, w, block.timestamp);
+        uint256 debt = _debt[t][tokenId];
+        fresh = owed > debt ? owed - debt : 0;
     }
 
-    /// @dev Total pending claim over all ids (accrued + carried, minus paid).
-    function _peekStep(uint256 tokenId, Energy storage e, address tKey2) private view returns (uint256 claimable) {
-        uint256 W = _liveWeight();
-        if (W == 0) {
-            return 0;
+    /// @dev Keeper-gated push of a holder's already-accrued balance (ETH or ERC-20).
+    function _push(address t, address holder) internal {
+        uint256 amt = pendingClaims[t][holder];
+        uint256 threshold = dustThreshold[t];
+        if (amt == 0 || amt < threshold) revert NothingToClaim();
+        pendingClaims[t][holder] = 0; // CEI: state before the external transfer
+        _energy[t].claimed += amt;
+        if (t == address(0)) {
+            (bool ok, ) = holder.call{value: amt}("");
+            if (!ok) revert TransferFailed();
+        } else {
+            IERC20(t).safeTransfer(holder, amt);
         }
-        // Use the frozen weight basis when the interval has already been touched.
-        uint256 w = _energyWeightAt[tKey2][tokenId];
-        if (w == 0) {
-            w = _weightOf(tokenId);
-        }
-        if (e.pricePerWeight != 0 && block.timestamp > e.lastUpdate) {
-            uint256 dt = block.timestamp - e.lastUpdate;
-            if (dt > WINDOW) {
-                dt = WINDOW;
-            }
-            // Token share of the LIVE weighted supply, scaled by the holding interval.
-            claimable += nomDivision(e.pricePerWeight * w * dt, W * WINDOW);
-        }
-        uint256 paid = _energyAt[tKey2][tokenId];
-        claimable = claimable > paid ? claimable - paid : 0;
+        emit RewardsPushed(msg.sender, holder, t, amt);
     }
 
-    /// @dev Advance `tokenId`'s stake and return its newly payable amount.
-    function _step(uint256 tokenId, Energy storage e, address tKey, uint256 W) internal returns (uint256 payableAmount) {
-        if (W == 0) {
-            return 0;
-        }
-        // Freeze the weight basis at first touch so a later tier change cannot inflate
-        // an already partially-consumed interval.
-        uint256 w = _energyWeightAt[tKey][tokenId];
-        if (w == 0) {
-            w = _weightOf(tokenId);
-            _energyWeightAt[tKey][tokenId] = w;
-        }
-        // Stake-space is capped at one full window: a token can never accrue more than
-        // its complete weighted share from a single index, no matter how long it waits.
-        uint256 dt = block.timestamp - e.lastUpdate;
-        if (dt > WINDOW) {
-            dt = WINDOW;
-        }
-        uint256 scheduled;
-        if (e.pricePerWeight != 0 && dt != 0) {
-            // share = w / W_live, scaled by the holding interval dt / WINDOW.
-            scheduled += nomDivision(e.pricePerWeight * w * dt, W * WINDOW);
-        }
-        uint256 paid = _energyAt[tKey][tokenId];
-        payableAmount = scheduled > paid ? scheduled - paid : 0;
-        _energyAt[tKey][tokenId] = scheduled;
-    }
-
-    /// @dev No claimant-side carry: every claimable wei flows through `pricePerWeight`,
-    ///      so there is no secondary path that could be double-credited.
-    function _carried(Energy storage) internal pure returns (uint256) {
-        return 0;
-    }
-
-    /// @dev Floor division helper (documented so audits can see the rounding).
-    function nomDivision(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a / b;
-    }
-
-    /// @dev Dust releasable to the DAO: residue already folded into the index in a
-    ///      prior deposit (so no live holder can still claim it). The current index's
-    ///      own residue is never releasable while it may still be claimed.
+    /// @dev Dust releasable to the DAO: residue already folded into a prior
+    ///      interval. The current interval's residue is never releasable.
     function _sweepable(address t) internal view returns (uint256) {
         uint256 total = t == address(0) ? ethDust : erc20Dust[IERC20(t)];
-        uint256 fresh = _pendingDust(t);
+        uint256 fresh = _energy[t].dust;
         return total > fresh ? total - fresh : 0;
-    }
-
-    /// @dev True when no interval has elapsed since the last index write.
-    function _justCarried(Energy storage e) internal view returns (bool) {
-        return block.timestamp == e.lastUpdate;
     }
 
     // ── Fallback ───────────────────────────────────────────────────────────────
