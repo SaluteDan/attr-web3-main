@@ -37,7 +37,7 @@ describe("MembershipFeeDistributor", function () {
       500n,
       "ipfs://test",
       50000n,
-      5n,
+      2n,
     ]);
 
     // Mint token 0 → user1, token 1 → user2, token 2 → user3

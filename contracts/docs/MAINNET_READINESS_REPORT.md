@@ -8,6 +8,34 @@
 
 ---
 
+## Membership modernization addendum — 2026-10-14
+
+The historical readiness statements below are **not sign-off for this modernization**.
+Fresh independent QA/security approval and deployment configuration remain required.
+
+- Exact ETH checkout now rejects both underpayment and overpayment. USDC checkout
+  consumes a mandatory exact-price EIP-2612 permit and forwards the six-decimal amount.
+- Only tiers 1/2 exist on-chain, including administrative allocations and relabels.
+- Genesis prices: 0.225/0.100 ETH and 580/260 USDC. Both currencies reprice through
+  owner queue + 48-hour notice + permissionless execution; no automatic batch rollover.
+- Public paid mints atomically deliver 2500/1000 ATTR. Admin allocations grant none.
+  Bind tokens once using `configurePaymentTokens`; ATTR administrator must explicitly
+  grant MembershipToken MINTER_ROLE. Revocation/cap failure rolls back checkout.
+- All public/admin mint paths and withdrawal share the reentrancy lock. Tier/counters
+  are reserved before any callback. Protocol ceilings: 50,000 supply / 2 public mints
+  per wallet; constructor can choose stricter limits. Admin mints retain their existing
+  exemption from the public wallet counter (not the global supply cap).
+- Exploit tests cover ETH receiver, permit, transferFrom, ATTR mint, NFT hook and owner
+  withdrawal reentry; replay/expired/wrong-signer/domain/high-s permits; role rollback;
+  owner control access; supply boundary; stateful mixed-payment conservation.
+- Hardhat: 264 passing. Full Foundry run: 129 passing before final coverage additions;
+  final Security suite: 57 passing, QA suite: 29 passing, stateful invariants: 3 passing
+  at 256 runs × 32 calls each. Numeric/signature fuzz tests use 10,000 cases.
+- Solidity lint exits successfully with existing repository-wide warnings. Supplemental
+  `tsc --noEmit` is not green due to repository-wide generic ABI typing/plugin issues;
+  no `any` was added. Membership-specific results and limitations are in
+  `MEMBERSHIP_MODERNIZATION.md`.
+
 ## Executive Summary
 
 All reviewed contracts are **READY FOR MAINNET DEPLOYMENT**:
