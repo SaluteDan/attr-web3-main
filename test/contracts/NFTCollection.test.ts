@@ -152,11 +152,8 @@ describe("NFTCollection", function () {
   }
 
   async function deployErc20() {
-    return viem.deployContract("ATTRToken", [
-      parseEther("1000000"),
-      parseEther("1000"),
-      owner.account.address,
-    ]);
+    // ATTRToken mints its entire fixed 1B cap to the distribution address at deploy.
+    return viem.deployContract("ATTRToken", [owner.account.address]);
   }
 
   // Helper to build an ERC20 voucher using a custom contract address

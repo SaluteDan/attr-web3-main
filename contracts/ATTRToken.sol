@@ -6,79 +6,45 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Capped.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
-import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Nonces.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./Errors.sol";
 
 /**
  * @title ATTRToken
  * @author Attributes Gallery
  * @notice "Attribute Point" ($ATTR) - The Native Token of the Attributes platform.
- * @dev Features: Capped Supply, Burnable, Gasless Approvals (Permit), Access Control, Governance (Votes), Pausable.
+ * @dev Features: Fixed capped supply, Burnable, Gasless Approvals (Permit), Governance (Votes).
+ *
+ *      Issuance model (see specs/attr-issuance-preminted-treasury.md):
+ *      - The entire 1,000,000,000 ATTR cap is minted exactly once, at deploy, to the
+ *        distribution address. `mint()` and `MINTER_ROLE` no longer exist.
+ *      - Total supply is therefore constant at the cap forever, except when tokens are
+ *        burned via `burn()` / `burnFrom()`.
  */
-contract ATTRToken is ERC20, ERC20Burnable, ERC20Capped, ERC20Permit, ERC20Votes, AccessControl, Pausable {
+contract ATTRToken is ERC20, ERC20Burnable, ERC20Capped, ERC20Permit, ERC20Votes {
     /**
-     * @notice Role identifier for addresses authorized to mint new tokens.
+     * @notice Fixed, immutable supply cap: 1,000,000,000 ATTR.
      */
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    uint256 public constant CAP = 1_000_000_000 ether;
 
     /**
-     * @notice Constructor sets up the token with a Cap and Initial Supply.
-     * @dev Grants DEFAULT_ADMIN_ROLE and MINTER_ROLE to the deployer. Mints initial supply to treasury.
-     * @param cap_ The maximum number of tokens that can ever exist (in wei).
-     * @param initialSupply_ The amount to mint immediately to the treasury (must be <= cap_).
-     * @param treasury_ The address to receive the initial supply (cannot be zero address).
+     * @notice Deploys the token and mints the entire fixed cap to `distributionDeployer_`.
+     * @dev There is no mint function; the full cap is created in a single update at deploy.
+     * @param distributionDeployer_ The address receiving the full 1B allocation (cannot be zero).
      */
-    constructor(uint256 cap_, uint256 initialSupply_, address treasury_)
+    constructor(address distributionDeployer_)
         ERC20("Attribute Point", "ATTR")
-        ERC20Capped(cap_)
+        ERC20Capped(CAP)
         ERC20Permit("Attribute Point")
     {
-        if (treasury_ == address(0)) revert ZeroAddress();
-        if (cap_ == 0) revert InvalidMaxSupply();
-        if (initialSupply_ > cap_) revert MaxSupplyExceeded();
-        
-        // Grant Deployer the Admin and Minter roles
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(MINTER_ROLE, msg.sender);
+        if (distributionDeployer_ == address(0)) revert ZeroAddress();
 
-        // Mint initial supply
-        if (initialSupply_ > 0) {
-            _mint(treasury_, initialSupply_);
-        }
+        // Mint the entire fixed cap to the distribution address in a single update.
+        _mint(distributionDeployer_, CAP);
     }
 
     /**
-     * @notice Mint new tokens to a specified address.
-     * @dev Restricted to addresses with MINTER_ROLE. Reverts if total supply would exceed cap.
-     * @param to The address to receive the minted tokens.
-     * @param amount The amount of tokens to mint (in wei).
-     */
-    function mint(address to, uint256 amount) public onlyRole(MINTER_ROLE) whenNotPaused {
-        _mint(to, amount);
-    }
-
-    /**
-     * @notice Pause minting of new tokens.
-     * @dev Restricted to addresses with DEFAULT_ADMIN_ROLE. Emits Paused event.
-     *      Only `mint()` is gated by the pause state; existing token transfers,
-     *      approvals, and burns remain enabled while paused.
-     */
-    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _pause();
-    }
-
-    /**
-     * @notice Unpause minting, restoring the ability to mint new tokens.
-     * @dev Restricted to addresses with DEFAULT_ADMIN_ROLE. Emits Unpaused event.
-     */
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _unpause();
-    }
-
-    /**
-     * @dev Override required by ERC20Capped and ERC20Votes
+     * @dev Override required by ERC20Capped and ERC20Votes.
      */
     function _update(address from, address to, uint256 value) internal override(ERC20, ERC20Capped, ERC20Votes) {
         super._update(from, to, value);

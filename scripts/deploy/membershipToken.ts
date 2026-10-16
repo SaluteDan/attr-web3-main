@@ -48,10 +48,11 @@ async function deployMembershipToken() {
       BigInt(params.maxMintPerWallet),
     ]);
 
-    // Public checkout fails closed until the grant token and USDC are bound.
-    // The ATTR administrator must grant MINTER_ROLE in a separate authorized step.
+    // Public checkout fails closed until the onboarding vault and USDC are bound.
+    // Deploy ATTROnboardingVault(attrToken, membership, daoTimelock), fund it with the
+    // welcome-grant pool, then call configurePaymentTokens(vault, usdc) as the owner.
     console.log(
-      "Configure payment tokens and grant ATTR MINTER_ROLE before opening the sale.",
+      "Deploy/fund ATTROnboardingVault, then call configurePaymentTokens(vault, usdc) before opening the sale.",
     );
     const contractAddress = membership.address;
     console.log("✅ MembershipToken deployed to:", contractAddress);

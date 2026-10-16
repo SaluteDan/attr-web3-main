@@ -18,6 +18,9 @@ describe("MembershipToken", function () {
   let usdc: Awaited<
     ReturnType<typeof viem.deployContract<"MockMembershipUSDC">>
   >;
+  let vault: Awaited<
+    ReturnType<typeof viem.deployContract<"ATTROnboardingVault">>
+  >;
   let publicClient: Awaited<ReturnType<typeof viem.getPublicClient>>;
 
   const MAX_SUPPLY = 10000n;
@@ -57,17 +60,16 @@ describe("MembershipToken", function () {
       await viem.getWalletClients();
     publicClient = await viem.getPublicClient();
     membership = await deployMembership();
-    attr = await viem.deployContract("ATTRToken", [
-      parseEther("1000000000"),
-      0n,
+    attr = await viem.deployContract("ATTRToken", [owner.account.address]);
+    usdc = await viem.deployContract("MockMembershipUSDC");
+    // Onboarding vault holds the 150M welcome-grant pool authorized to this membership.
+    vault = await viem.deployContract("ATTROnboardingVault", [
+      attr.address,
+      membership.address,
       owner.account.address,
     ]);
-    usdc = await viem.deployContract("MockMembershipUSDC");
-    await membership.write.configurePaymentTokens([attr.address, usdc.address]);
-    await attr.write.grantRole([
-      await attr.read.MINTER_ROLE(),
-      membership.address,
-    ]);
+    await attr.write.transfer([vault.address, parseEther("150000000")]);
+    await membership.write.configurePaymentTokens([vault.address, usdc.address]);
   });
 
   async function signPermit(tier: bigint, signer = user1, expired = false) {
@@ -199,17 +201,14 @@ describe("MembershipToken", function () {
         await usdc.read.balanceOf([paymentReceiver.account.address]),
       ).to.equal(price);
     });
-    it("Should roll back permit and payment when MINTER_ROLE is revoked", async function () {
-      await attr.write.revokeRole([
-        await attr.read.MINTER_ROLE(),
-        membership.address,
-      ]);
+    it("Should roll back permit and payment when the vault is de-authorized", async function () {
+      await vault.write.setMembershipToken([user2.account.address]);
       await viem.assertions.revertWithCustomError(
         membership.write.mintMembershipWithUSDC(await signPermit(1n), {
           account: user1.account,
         }),
-        attr,
-        "AccessControlUnauthorizedAccount",
+        vault,
+        "Unauthorized",
       );
       expect(await usdc.read.nonces([user1.account.address])).to.equal(0n);
       expect(
@@ -515,15 +514,21 @@ describe("MembershipToken", function () {
       const small = await deployMembership(1n, 1n);
       await setPrice(small, 1n, parseEther("0.1"));
       const attr = await viem.deployContract("ATTRToken", [
-        parseEther("1000000000"),
-        0n,
         owner.account.address,
       ]);
       const usdc = await viem.deployContract("MockMembershipUSDC");
-      await small.write.configurePaymentTokens([attr.address, usdc.address]);
-      await attr.write.grantRole([
-        await attr.read.MINTER_ROLE(),
+      const vaultSmall = await viem.deployContract("ATTROnboardingVault", [
+        attr.address,
         small.address,
+        owner.account.address,
+      ]);
+      await attr.write.transfer([
+        vaultSmall.address,
+        parseEther("150000000"),
+      ]);
+      await small.write.configurePaymentTokens([
+        vaultSmall.address,
+        usdc.address,
       ]);
       await small.write.mintMembership([1n, "ipfs://1"], {
         account: user1.account,

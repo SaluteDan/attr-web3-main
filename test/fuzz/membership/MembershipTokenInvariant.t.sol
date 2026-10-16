@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {QAMembershipTokenTest} from "./QAMembershipToken.t.sol";
 import {MembershipToken} from "../../../contracts/MembershipToken.sol";
 import {ATTRToken} from "../../../contracts/ATTRToken.sol";
+import {ATTROnboardingVault} from "../../../contracts/ATTROnboardingVault.sol";
 import {MockMembershipUSDC} from "../../../contracts/mocks/MockMembershipUSDC.sol";
 
 /// @notice Stateful mixed-payment handler with exact accounting of successful mints.
@@ -59,15 +60,17 @@ contract MembershipHandler is Test {
 contract MembershipTokenInvariantTest is Test {
     MembershipToken internal membership;
     ATTRToken internal attr;
+    ATTROnboardingVault internal vault;
     MockMembershipUSDC internal usdc;
     address internal treasury = address(0x777);
     MembershipHandler internal handler;
     function setUp() public {
-        attr = new ATTRToken(1e9 ether, 0, treasury);
+        attr = new ATTRToken(address(this));
         usdc = new MockMembershipUSDC();
         membership = new MembershipToken("ATTR-MEMBER-ID", "ATTR#", address(this), treasury, treasury, 500, "", 50000, 2);
-        membership.configurePaymentTokens(address(attr), address(usdc));
-        attr.grantRole(attr.MINTER_ROLE(), address(membership));
+        vault = new ATTROnboardingVault(address(attr), address(membership), address(this));
+        attr.transfer(address(vault), 150_000_000 ether);
+        membership.configurePaymentTokens(address(vault), address(usdc));
         handler = new MembershipHandler(membership, usdc);
         membership.transferOwnership(address(handler));
         targetContract(address(handler));

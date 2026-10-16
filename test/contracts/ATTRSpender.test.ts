@@ -23,11 +23,8 @@ describe("ATTRSpender", function () {
       await viem.getWalletClients();
 
     // Deploy ATTR token
-    attr = await viem.deployContract("ATTRToken", [
-      parseEther("1000000"),
-      parseEther("100000"),
-      owner.account.address,
-    ]);
+    // ATTRToken mints its entire fixed 1B cap to the distribution address at deploy.
+    attr = await viem.deployContract("ATTRToken", [owner.account.address]);
 
     // Deploy ATTRSpender
     spender = await viem.deployContract("ATTRSpender", [

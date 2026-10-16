@@ -232,11 +232,8 @@ describe("PaymentSplitter", function () {
     let token: Awaited<ReturnType<typeof viem.deployContract<"ATTRToken">>>;
 
     beforeEach(async function () {
-      token = await viem.deployContract("ATTRToken", [
-        parseEther("1000000"),
-        parseEther("100000"),
-        sender.account.address,
-      ]);
+      // ATTRToken mints its entire fixed 1B cap to the distribution address at deploy.
+      token = await viem.deployContract("ATTRToken", [sender.account.address]);
 
       await token.write.transfer([splitter.address, parseEther("1000")], {
         account: sender.account,
@@ -530,11 +527,8 @@ describe("PaymentSplitter", function () {
     let token: Awaited<ReturnType<typeof viem.deployContract<"ATTRToken">>>;
 
     beforeEach(async function () {
-      token = await viem.deployContract("ATTRToken", [
-        parseEther("1000000"),
-        parseEther("100000"),
-        sender.account.address,
-      ]);
+      // ATTRToken mints its entire fixed 1B cap to the distribution address at deploy.
+      token = await viem.deployContract("ATTRToken", [sender.account.address]);
 
       await token.write.transfer([splitter.address, parseEther("1000")], {
         account: sender.account,

@@ -6,7 +6,10 @@ dotenv.config();
 
 /**
  * Deploy ATTRToken contract
- * Run with: npx hardhat run scripts/deploy-token.ts --network baseSepolia
+ * Run with: npx hardhat run scripts/deploy/token.ts --network baseSepolia
+ *
+ * The token has a fixed, immutable cap of 1,000,000,000 ATTR. The entire cap is minted
+ * to the distribution address at deploy; there is no mint function or minter role.
  */
 async function main() {
   console.log("Deploying ATTRToken ($ATTR)...");
@@ -16,24 +19,18 @@ async function main() {
 
   console.log("Deploying with account:", deployer.account.address);
 
-  const TREASURY_ADDRESS = (process.env.PLATFORM_TREASURY_ADDRESS ||
+  // Deploy-time distribution address receives the full 1B allocation, then funds the
+  // onboarding vault, store inventory pool, and third-party vesting streams.
+  const DISTRIBUTION_ADDRESS = (process.env.PLATFORM_TREASURY_ADDRESS ||
     deployer.account.address) as `0x${string}`;
 
-  // Tokenomics (Adjust these values as needed)
-  const CAP_AMOUNT = 1_000_000_000; // 1 Billion Max Supply
-  const INITIAL_MINT = 100_000_000; // 100 Million Initial Supply (10%)
+  const CAP = parseEther("1000000000"); // 1 Billion fixed max supply
 
-  const cap = parseEther(CAP_AMOUNT.toString());
-  const initialSupply = parseEther(INITIAL_MINT.toString());
-
-  console.log("Treasury:", TREASURY_ADDRESS);
-  console.log("Max Cap:", CAP_AMOUNT.toLocaleString(), "ATTR");
-  console.log("Initial Mint:", INITIAL_MINT.toLocaleString(), "ATTR");
+  console.log("Distribution address:", DISTRIBUTION_ADDRESS);
+  console.log("Fixed Cap:", "1,000,000,000 ATTR (fully minted at deploy)");
 
   const token = await connection.viem.deployContract("ATTRToken", [
-    cap,
-    initialSupply,
-    TREASURY_ADDRESS,
+    DISTRIBUTION_ADDRESS,
   ]);
 
   const tokenAddress = token.address;
@@ -43,7 +40,7 @@ async function main() {
   console.log(`ATTR_TOKEN_ADDRESS=${tokenAddress}`);
   console.log("\nVerify on BaseScan:");
   console.log(
-    `npx hardhat verify --network baseSepolia ${tokenAddress} ${cap} ${initialSupply} ${TREASURY_ADDRESS}`,
+    `npx hardhat verify --network baseSepolia ${tokenAddress} ${DISTRIBUTION_ADDRESS}`,
   );
 }
 

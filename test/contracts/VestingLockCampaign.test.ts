@@ -23,11 +23,8 @@ describe("VestingLockCampaign", function () {
     const [owner, treasury, user, user2, recipient] =
       await viem.getWalletClients();
 
-    const token = await viem.deployContract("ATTRToken", [
-      CAP,
-      INITIAL_SUPPLY,
-      treasury.account.address,
-    ]);
+    // ATTRToken mints its entire fixed 1B cap to the distribution address at deploy.
+    const token = await viem.deployContract("ATTRToken", [treasury.account.address]);
 
     return { owner, treasury, user, user2, recipient, token };
   }
@@ -310,11 +307,7 @@ describe("VestingLockCampaign", function () {
 describe("VestingLockCampaignFactory", function () {
   it("deploys isolated campaigns and records them", async function () {
     const [owner, treasury] = await viem.getWalletClients();
-    const token = await viem.deployContract("ATTRToken", [
-      parseEther("1000000000"),
-      parseEther("100000000"),
-      treasury.account.address,
-    ]);
+    const token = await viem.deployContract("ATTRToken", [treasury.account.address]);
 
     const factory = await viem.deployContract("VestingLockCampaignFactory", [
       owner.account.address,

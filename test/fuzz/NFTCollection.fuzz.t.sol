@@ -17,7 +17,6 @@ contract NFTCollectionFuzzTest is Test {
     uint256 internal ownerPrivateKey;
     address public owner;
     address public paymentReceiver;
-    address public minter;
     address public alice;
     address public bob;
     
@@ -41,7 +40,6 @@ contract NFTCollectionFuzzTest is Test {
         ownerPrivateKey = 0xA11CE;
         owner = vm.addr(ownerPrivateKey);
         paymentReceiver = makeAddr("paymentReceiver");
-        minter = makeAddr("minter");
         alice = makeAddr("alice");
         bob = makeAddr("bob");
         
@@ -62,13 +60,8 @@ contract NFTCollectionFuzzTest is Test {
             address(0)       // attrSpender_ (disabled)
         );
         
-        // Deploy payment token
-        paymentToken = new ATTRToken(
-            1_000_000_000 * 1e18,
-            1_000_000 * 1e18,
-            owner
-        );
-        paymentToken.grantRole(paymentToken.MINTER_ROLE(), minter);
+        // Deploy payment token: full fixed cap mints to the collection owner.
+        paymentToken = new ATTRToken(owner);
         
         vm.stopPrank();
     }

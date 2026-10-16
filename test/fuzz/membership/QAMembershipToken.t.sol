@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {MembershipToken} from "../../../contracts/MembershipToken.sol";
 import {ATTRToken} from "../../../contracts/ATTRToken.sol";
+import {ATTROnboardingVault} from "../../../contracts/ATTROnboardingVault.sol";
 import {MockMembershipUSDC} from "../../../contracts/mocks/MockMembershipUSDC.sol";
 import {ReentrantMintRecipient} from "../../../contracts/mocks/ReentrantMintRecipient.sol";
 import "../../../contracts/Errors.sol";
@@ -12,6 +13,7 @@ import "../../../contracts/Errors.sol";
 contract QAMembershipTokenTest is Test {
     MembershipToken internal membership;
     ATTRToken internal attr;
+    ATTROnboardingVault internal vault;
     MockMembershipUSDC internal usdc;
     address internal buyer;
     address internal treasury = address(0x777);
@@ -21,11 +23,12 @@ contract QAMembershipTokenTest is Test {
 
     function setUp() public {
         buyer = vm.addr(KEY);
-        attr = new ATTRToken(1e9 ether, 0, treasury);
+        attr = new ATTRToken(address(this));
         usdc = new MockMembershipUSDC();
         membership = new MembershipToken("ATTR-MEMBER-ID", "ATTR#", address(this), treasury, treasury, 500, "ipfs://collection", 50000, 2);
-        membership.configurePaymentTokens(address(attr), address(usdc));
-        attr.grantRole(attr.MINTER_ROLE(), address(membership));
+        vault = new ATTROnboardingVault(address(attr), address(membership), address(this));
+        attr.transfer(address(vault), 150_000_000 ether);
+        membership.configurePaymentTokens(address(vault), address(usdc));
         vm.deal(buyer, 100 ether);
         usdc.mint(buyer, 10000e6);
     }
@@ -101,13 +104,13 @@ contract QAMembershipTokenTest is Test {
         assertEq(membership.ownerOf(0), buyer);
         assertEq(attr.balanceOf(buyer), 2500 ether);
     }
-    function test_RevokedRoleRollsBackETH() public {
-        attr.revokeRole(attr.MINTER_ROLE(), address(membership));
+    function test_RevokedVaultAuthorizationRollsBackETH() public {
+        vault.setMembershipToken(address(0xDEAD));
         vm.prank(buyer); vm.expectRevert(); membership.mintMembership{value: ETH_PRICE}(1, "x");
         assertEq(treasury.balance, 0); assertEq(membership.totalSupply(), 0); assertEq(membership.getMintedCount(buyer), 0);
     }
-    function test_RevokedRoleRollsBackPermitAndTransfer() public {
-        attr.revokeRole(attr.MINTER_ROLE(), address(membership));
+    function test_RevokedVaultAuthorizationRollsBackPermitAndTransfer() public {
+        vault.setMembershipToken(address(0xDEAD));
         expectPermitFailure = true; mintUSDC(1, KEY, 0, block.timestamp + 1 days, usdc.DOMAIN_SEPARATOR());
         assertEq(usdc.nonces(buyer), 0); assertEq(usdc.balanceOf(treasury), 0); assertEq(membership.totalSupply(), 0);
     }
