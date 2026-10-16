@@ -46,7 +46,7 @@ contract MockMembershipToken is ERC721 {
     /// @dev Transfer hook: settle both holders' accrual via the distributor.
     function _update(address to, uint256 tokenId, address auth) internal virtual override returns (address) {
         address from = super._update(to, tokenId, auth);
-        if (feeDistributor != address(0) && from != address(0) && to != address(0) && from != to) {
+        if (feeDistributor != address(0) && from != address(0) && from != to) {
             IMembershipFeeDistributor(feeDistributor).checkpoint(tokenId, from, to);
         }
         return from;
@@ -70,6 +70,11 @@ contract MockMembershipToken is ERC721 {
     }
 
     // ── Read surface bound by the distributor ─────────────────────────────────
+
+    /// @notice Burn an existing token (test-only); triggers the transfer hook.
+    function burn(uint256 tokenId) external {
+        _burn(tokenId);
+    }
 
     /// @notice Read the tier of an existing membership; reverts if unminted.
     function getTier(uint256 tokenId) public view virtual returns (uint256) {

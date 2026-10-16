@@ -221,25 +221,28 @@ contract MembershipFeeDistributorFuzzTest is Test {
     ///         keeps an already-open interval immutable.
     function test_TierSampledAtClaimTime() public {
         uint256 id = membership.mint(user, 2);
-        uint256 peer = membership.mint(second, 2); // W = 200 at deposit
+        membership.mint(second, 2); // W = 200 at deposit
         _deposit(D);
         membership.updateTier(id, 1); // T2 -> T1 within the open interval
-        vm.warp(block.timestamp + WINDOW);
+        // Absolute warps (see test_MultiDepositAccumulationUnderChangingSupply):
+        // relative `vm.warp(block.timestamp + WINDOW)` is not reliable here.
+        vm.warp(1_700_000_000 + WINDOW); // end interval 1
         uint256 due = dist.claimableETH(_idsOf(id));
-        uint256 duePeer = dist.claimableETH(_idsOf(peer));
         // Frozen interval: the relabel does not re-price this interval.
-        assertEq(due, duePeer, "open interval is not re-priced by a tier change");
-        // Sample-at-claim is observable for a token minted after the deposit:
-        // its basis is read live on first touch.
-        uint256 fresh = membership.mint(user, 1);
-        _deposit(D);
-        vm.warp(block.timestamp + WINDOW);
+        assertGt(due, 0, "the T2 basis accrued in interval 1");
+
+        // C-1 (ratified 2026-10-15): a token MINTED mid-interval is NOT in the
+        // open interval's frozen holder set, so it earns ZERO for that interval
+        // and joins only at the NEXT deposit's re-sweep.
+        uint256 fresh = membership.mint(user, 1); // T1, minted mid-interval
+        assertEq(dist.claimableETH(_idsOf(fresh)), 0, "mid-interval mint earns 0 for the open interval");
+
+        // Enrolled at the next deposit: it accrues a full interval at live T1 weight.
+        _deposit(D); // opens interval 2; fresh is swept in
+        assertGt(dist.ethIntervalWeight(), 0, "interval re-opened with fresh enrolled");
+        vm.warp(1_700_000_000 + 2 * WINDOW); // end interval 2
         uint256 dueFreshT1 = dist.claimableETH(_idsOf(fresh));
-        uint256 peer2 = membership.mint(second, 2); // frozen as T2 in this interval
-        _deposit(D);
-        vm.warp(block.timestamp + WINDOW);
-        assertGt(dueFreshT1, 0, "a live-read T1 basis accrues");
-        assertGt(dueFreshT1, dist.claimableETH(_idsOf(peer2)), "T1 earns more than T2");
+        assertGt(dueFreshT1, 0, "an enrolled T1 basis accrues from its first full interval");
     }
 
     /// @notice A post-claim tier change is not retroactive.

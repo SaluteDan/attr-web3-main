@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import {Test} from "forge-std/Test.sol";
+import {MembershipFeeDistributor} from "../../../contracts/MembershipFeeDistributor.sol";
+import {MockMembershipToken} from "../../../contracts/mocks/MockMembershipToken.sol";
+import {MockFeeUSDC} from "../../../contracts/mocks/MockFeeTokens.sol";
+import "../../../contracts/Errors.sol";
+
+/// @notice ERC-721-receiver-capable ETH payee.
+contract C1Actor {
+    uint256 public received;
+    receive() external payable {
+        received += msg.value;
+    }
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+}
+
+/**
+ * @title MembershipFeeDistributorC1Test
+ * @notice Regression suite for the C-1 finding: a token MINTED mid-interval
+ *         (after a deposit) must NOT capture value from intervals it was absent
+ *         from. Two mechanisms enforce this:
+ *           1. `_frozenWeight` returns 0 for a token absent from the deposit
+ *              sweep, so it earns nothing from the currently open interval.
+ *           2. `_freezeBasis` re-bases a newly enrolled token's debt to the
+ *              closed-interval cumulative at enrollment, so it cannot claim
+ *              PRIOR closed intervals either (the `cumReward` accumulator
+ *              distributes by current weight, which would otherwise leak).
+ *         Without both, `Σ entitlements > pool` and a later claim reverts.
+ */
+contract MembershipFeeDistributorC1Test is Test {
+    MembershipFeeDistributor internal dist;
+    MockMembershipToken internal membership;
+    MockFeeUSDC internal usdc;
+
+    address internal dao = address(0xDA0);
+    C1Actor internal aliceC;
+    C1Actor internal bobC;
+    address internal alice;
+    address internal bob;
+
+    uint256 internal constant WINDOW = 1 days;
+    uint256 internal constant D = 1_000 ether;
+
+    function setUp() public {
+        membership = new MockMembershipToken("ATTR-MEMBER-ID", "ATTR#");
+        dist = new MembershipFeeDistributor(address(membership), dao);
+        usdc = new MockFeeUSDC();
+        membership.setFeeDistributor(address(dist));
+        vm.deal(dao, 1_000_000 ether);
+        aliceC = new C1Actor();
+        bobC = new C1Actor();
+        alice = address(aliceC);
+        bob = address(bobC);
+        vm.deal(alice, 1 ether);
+        vm.deal(bob, 1 ether);
+        vm.prank(dao);
+        dist.setTotalMintedSnapshot(type(uint256).max);
+        vm.warp(1_700_000_000);
+    }
+
+    function _one(uint256 id) internal pure returns (uint256[] memory a) {
+        a = new uint256[](1);
+        a[0] = id;
+    }
+
+    function _deposit(uint256 amount) internal {
+        vm.prank(dao);
+        dist.depositETH{value: amount}();
+    }
+
+    function _pool(uint256 amount, uint256 W) internal pure returns (uint256) {
+        return amount - (amount % W);
+    }
+
+    // ── C-1 core: mid-interval mint must not over-commit the pool ──────────────
+
+    function test_MintMidInterval_NoOverCommit_ETH() public {
+        uint256 aliceId = membership.mint(alice, 1);
+        _deposit(D); // pool sized to W = 225 (one T1)
+        vm.warp(block.timestamp + WINDOW / 2);
+        uint256 bobId = membership.mint(bob, 1); // MINTED mid-interval (the C-1 hole)
+        vm.warp(block.timestamp + WINDOW / 2);
+
+        uint256 pool = _pool(D, 225);
+
+        // Alice (held the full interval) claims her full weighted share.
+        vm.prank(alice);
+        dist.claimETH(_one(aliceId));
+        assertEq(aliceC.received(), pool, "original holder must get the full pool");
+
+        // Bob (minted mid-interval) earns nothing from the closed interval.
+        vm.prank(bob);
+        vm.expectRevert(NothingToClaim.selector);
+        dist.claimETH(_one(bobId));
+
+        // Conservation: payouts never exceed the deposit.
+        assertLe(aliceC.received(), D, "payout exceeded deposit");
+        assertEq(address(dist).balance, D - pool, "only dust remains");
+    }
+
+    function test_MintMidInterval_ParticipatesNextInterval() public {
+        uint256 aliceId = membership.mint(alice, 1);
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW / 2);
+        uint256 bobId = membership.mint(bob, 1);
+        vm.warp(block.timestamp + WINDOW / 2);
+
+        // New interval: both tokens are in the frozen set now (W = 450).
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW);
+
+        uint256 pool1 = _pool(D, 225);
+        uint256 pool2 = _pool(D, 450);
+
+        // Bob (enrolled at the interval-2 deposit) earns ONLY interval 2.
+        vm.prank(bob);
+        dist.claimETH(_one(bobId));
+        uint256 bobPaid = bobC.received();
+        assertApproxEqAbs(bobPaid, pool2 / 2, 2, "minter must accrue from the next interval only");
+        assertGt(bobPaid, 0, "minter must eventually accrue");
+
+        // Alice held BOTH intervals: interval-1 pool + half of interval 2.
+        vm.prank(alice);
+        dist.claimETH(_one(aliceId));
+        assertApproxEqAbs(aliceC.received(), pool1 + pool2 / 2, 2, "existing holder keeps both intervals");
+        assertLe(bobPaid + aliceC.received(), 2 * D, "conservation under mid-interval mint");
+    }
+
+    function test_MintMidInterval_NoOverCommit_ERC20() public {
+        uint256 aliceId = membership.mint(alice, 1);
+        usdc.mint(dao, D);
+        vm.startPrank(dao);
+        usdc.approve(address(dist), D);
+        dist.depositERC20(usdc, D);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + WINDOW / 2);
+        uint256 bobId = membership.mint(bob, 1);
+        vm.warp(block.timestamp + WINDOW / 2);
+
+        uint256 pool = _pool(D, 225);
+        vm.prank(alice);
+        dist.claimERC20(usdc, _one(aliceId));
+        assertEq(aliceC.received(), 0); // ETH untouched
+        assertEq(usdc.balanceOf(alice), pool, "original holder gets full ERC-20 pool");
+
+        vm.prank(bob);
+        vm.expectRevert(NothingToClaim.selector);
+        dist.claimERC20(usdc, _one(bobId));
+
+        assertLe(pool, D, "payout exceeded deposit");
+        assertEq(usdc.balanceOf(address(dist)), D - pool, "only dust remains");
+    }
+
+    // ── Burn must settle the outgoing holder (no stranding, no ownerOf revert) ─
+
+    function test_BurnSettlesHolder() public {
+        uint256 aliceId = membership.mint(alice, 1);
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW / 2);
+
+        uint256 pool = _pool(D, 225);
+
+        // Burn triggers the checkpoint with `to == 0`; the fix settles `from`.
+        membership.burn(aliceId);
+
+        // Alice's half-window slice is credited to her pending balance.
+        assertEq(dist.pendingClaim(address(0), alice), pool / 2, "burn must settle the holder");
+
+        vm.prank(alice);
+        dist.claimPendingETH();
+        assertEq(aliceC.received(), pool / 2, "holder claims post-burn");
+    }
+}

@@ -403,10 +403,11 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
     {
         address from = super._update(to, tokenId, auth);
         // F-1 transfer checkpoint: settle the outgoing holder's accrual and
-        // re-base the incoming holder's clock. Skips mint (from == 0) and burn
-        // (to == 0); `checkpoint` itself also guards `from == to`.
+        // re-base the incoming holder's clock. Notifies on transfer AND burn
+        // (`to == 0`) so a burned token settles the holder's slice; skips mint
+        // (`from == 0`) and self-transfer. `checkpoint` also guards `from == to`.
         address dist = feeDistributor;
-        if (dist != address(0) && from != address(0) && to != address(0) && from != to) {
+        if (dist != address(0) && from != address(0) && from != to) {
             IMembershipFeeDistributor(dist).checkpoint(tokenId, from, to);
         }
         return from;

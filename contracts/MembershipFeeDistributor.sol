@@ -158,6 +158,15 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
     /// @dev currency => tokenId => the open-interval start the basis belongs to.
     mapping(address => mapping(uint256 => uint64)) private _basisInterval;
 
+    /// @dev currency => tokenId => whether the token had non-zero weight in the
+    ///      interval BEFORE the current one. Used to decide debt re-basing on
+    ///      enrollment: a token that was ABSENT (weight 0) and is now present
+    ///      must have its debt re-based so it cannot claim prior-interval value;
+    ///      a CONTINUOUS holder must keep their debt so unsettled prior-interval
+    ///      accrual survives. (Re-basing on every interval change would erase a
+    ///      holder's closed-interval claim — the C-1 regression.)
+    mapping(address => mapping(uint256 => bool)) private _enrolledPrev;
+
     /// @notice currency => holder => accrued-but-unclaimed balance (per-address).
     /// @dev Implements F-1/F-2: a seller keeps their holding-period share here,
     ///      independent of who currently owns the token.
@@ -325,8 +334,21 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
         uint256 sum;
         for (uint256 i = 0; i < supply; ++i) {
             uint256 w = _weightOf(i);
+            // C-1: a token joining the weighted set for the FIRST time must not
+            // claim value that accrued while it was absent. A token is "newly
+            // enrolled" when it had ZERO weight in the previous interval and has
+            // non-zero weight now. Re-base its debt to the closed-interval
+            // cumulative so `owed - debt` excludes all prior intervals.
+            //
+            // A CONTINUOUS holder (non-zero weight last interval) keeps their
+            // debt untouched: re-basing for them would erase their unsettled
+            // closed-interval claim (the C-1 regression).
+            if (w != 0 && !_enrolledPrev[t][i]) {
+                _debt[t][i] = (w * e.cumReward) / ONE;
+            }
             _basisWeight[t][i] = w;
             _basisInterval[t][i] = marker;
+            _enrolledPrev[t][i] = (w != 0);
             sum += w;
         }
         // `sum` must equal the denominator used to size the pool; enforced by
@@ -340,9 +362,12 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
     /// @dev Callable only by the registered membership token. Settles the seller
     ///      into their own `pendingClaims` for every active currency, then
     ///      re-bases each token debt so the buyer accrues only from `now`.
-    function checkpoint(uint256 tokenId, address from, address to) external override {
+    function checkpoint(uint256 tokenId, address from, address to) external override nonReentrant {
         if (msg.sender != address(membershipToken)) revert Unauthorized();
-        if (from == address(0) || to == address(0) || from == to) return;
+        // Skip only mint (`from == 0`) and self-transfer. Burn (`to == 0`) is
+        // settled so the outgoing holder's accrued slice is not stranded and
+        // `claimable*` cannot revert on a burned token's `ownerOf`.
+        if (from == address(0) || from == to) return;
 
         uint256 totalSettled;
         uint256 n = _currencies.length;
@@ -612,24 +637,28 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
     ///      token (see `_freezeBasis`), so Σ bases == intervalWeight exactly.
     function _frozenWeight(address t, uint256 tokenId) internal returns (uint256 w) {
         Energy storage e = _energy[t];
-        uint256 basis = _basisWeight[t][tokenId];
-        if (basis != 0 && _basisInterval[t][tokenId] == e.lastUpdate) {
-            w = basis; // same interval: reuse the frozen basis
+        // C-1 fix: membership in the interval's holder set is decided SOLELY by the
+        // interval stamp, not by `basis != 0` (a genuine T0/extant token has basis
+        // 0 and must still be recognised). A token absent from the deposit sweep
+        // (i.e. minted after the interval opened) is assigned weight 0 for this
+        // open interval and earns nothing from a pool already sized to the
+        // deposit-time supply. It joins normally at the next deposit's re-sweep.
+        if (e.lastUpdate != 0 && _basisInterval[t][tokenId] == e.lastUpdate) {
+            w = _basisWeight[t][tokenId]; // in the frozen set: reuse its basis
         } else {
-            w = _clampedWeight(t, tokenId);
-            _basisWeight[t][tokenId] = w;
+            _basisWeight[t][tokenId] = 0;
             _basisInterval[t][tokenId] = e.lastUpdate;
+            w = 0;
         }
     }
 
     /// @dev View twin of `_frozenWeight` (never writes).
     function _frozenWeightView(address t, uint256 tokenId) internal view returns (uint256 w) {
         Energy storage e = _energy[t];
-        uint256 basis = _basisWeight[t][tokenId];
-        if (basis != 0 && _basisInterval[t][tokenId] == e.lastUpdate) {
-            w = basis;
+        if (e.lastUpdate != 0 && _basisInterval[t][tokenId] == e.lastUpdate) {
+            w = _basisWeight[t][tokenId];
         } else {
-            w = _clampedWeight(t, tokenId);
+            w = 0; // not in the interval's frozen holder set
         }
     }
 

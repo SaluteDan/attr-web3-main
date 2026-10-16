@@ -185,6 +185,11 @@ jobs:
       # Blocking gate: fails if the suite itself breaks. The known-broken
       # invariant_SumOfBalancesEqualsSupply is excluded via the repo's existing
       # --no-match-test convention.
+      #
+      # Profile note (Daniel 2026-10-15): the DEEP runs (fuzz 10k / invariant
+      # 10k x depth 256) are a LOCAL / pre-PR ritual only — they are too slow for
+      # GitHub. CI runs the FAST `ci` profile (fuzz 256 / invariant 256 x 32).
+      # Suite HEALTH still blocks the build; the deep runs never run on GitHub.
       - name: Run fuzz suite (forge test)
         run: npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply
 
