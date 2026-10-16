@@ -309,6 +309,79 @@ contract MembershipFeeDistributorCoverageTest is Test {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // Remaining branch coverage (constructor guards, empty-array guards,
+    // deposit-ETH zero guard, claimPendingETH transfer failure, frozen else-arm)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// @notice Constructor: both `address(0)` argument guards are exercised.
+    /// @dev `membershipToken_ == 0` reverts the contract's own ZeroAddress
+    ///      (line 221); `daoOwner == 0` is shadowed by `Ownable(address(0))`
+    ///      which reverts first (line 222's ZeroAddress branch is unreachable
+    ///      given the `Ownable(daoOwner)` base call).
+    function test_ConstructorBranches() public {
+        vm.expectRevert(ZeroAddress.selector);
+        new MembershipFeeDistributor(address(0), dao);
+
+        vm.expectRevert(abi.encodeWithSignature("OwnableInvalidOwner(address)", address(0)));
+        new MembershipFeeDistributor(address(membership), address(0));
+    }
+
+    /// @notice depositETH with zero value reverts ZeroDeposit (line 264 branch).
+    function test_DepositETH_ZeroValueReverts() public {
+        membership.mint(alice, 1);
+        vm.prank(dao);
+        vm.expectRevert(ZeroDeposit.selector);
+        dist.depositETH{value: 0}();
+    }
+
+    /// @notice claimETH / claimERC20 with an empty id array revert NoTokenIds
+    ///         (lines 389 and 415 branches), before any ownership check.
+    function test_ClaimEmptyArraysRevert() public {
+        uint256[] memory empty = new uint256[](0);
+        vm.prank(alice);
+        vm.expectRevert(NoTokenIds.selector);
+        dist.claimETH(empty);
+
+        vm.prank(alice);
+        vm.expectRevert(NoTokenIds.selector);
+        dist.claimERC20(usdc, empty);
+    }
+
+    /// @notice claimPendingETH with a reverting receiver propagates TransferFailed
+    ///         (line 438 branch: the transfer-failure revert on the pending path).
+    function test_ClaimPendingETH_TransferFailure() public {
+        RejectingPayee rej = new RejectingPayee();
+        uint256 id = membership.mint(address(rej), 1);
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW);
+        vm.prank(address(rej));
+        membership.transferFrom(address(rej), bob, id); // settle rej's pending ETH
+
+        vm.prank(address(rej));
+        vm.expectRevert(TransferFailed.selector);
+        dist.claimPendingETH();
+    }
+
+    /// @notice `_frozenWeight` else-arm (line 651): a token absent from the open
+    ///         interval's frozen set is stored with weight 0 and gets the current
+    ///         interval stamp. Exercised by settling a mid-interval mint through a
+    ///         real transfer (checkpoint -> _settleTo -> _frozenWeight).
+    function test_FrozenWeightElseArmWrite() public {
+        uint256 aliceId = membership.mint(alice, 1);
+        _deposit(D);
+        vm.warp(block.timestamp + WINDOW / 2);
+        uint256 bobId = membership.mint(bob, 1); // NOT in the frozen set (minted after deposit)
+
+        // Transfer the mid-interval mint: the outgoing-holder checkpoint calls
+        // `_frozenWeight`, which takes the else-arm (weight 0) for this token.
+        vm.prank(bob);
+        membership.transferFrom(bob, carol, bobId);
+
+        assertEq(dist.claimableETH(_one(bobId)), 0, "non-enrolled token accrues nothing this interval");
+        assertGt(dist.claimableETH(_one(aliceId)), 0, "interval member still accrues");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // pushRewards / pushRewardsERC20 guards + both branches (lines 463-477, 758-769)
     // ══════════════════════════════════════════════════════════════════════════
 
