@@ -111,14 +111,17 @@ contract MembershipFeeDistributorMigrationTest is Test {
         assertGt(v1BobDue, 0, "v1: bob accrued in interval 1");
         assertGt(v1AliceDue, v1BobDue, "v1: T1 out-earns T2 (2.25x basis)");
 
-        // Alice claims half her v1 entitlement before cutover (mixed settled state).
+        // Alice deliberately leaves her ENTIRE v1 accrual UNCLAIMED across the
+        // seam. This is the truthful form of the intent: a holder's retained
+        // (unclaimed) v1 balance must still be pull-claimable AFTER the cutover.
+        // (A pre-cutover partial claim is not testable here: settling the single
+        // open interval re-bases her head to the interval total, leaving the
+        // residual 'fresh' accrual below DUST_FLOOR = 1 wei, so nothing is
+        // credited to pendingClaims and a second claim on the same head reverts
+        // NothingToClaim — an artefact of the double-claim, not of the cutover.)
         uint256 aliceBalBefore = alice.balance;
-        vm.prank(alice);
-        v1.claimETH(_idsOf(idAlice));
-        uint256 alicePaid = alice.balance - aliceBalBefore;
-        assertGt(alicePaid, 0, "v1: alice withdrew pre-migration");
-        // She retains the rest as claimable (unclaimed head crosses the seam).
         uint256 aliceRetained = v1.claimableETH(_idsOf(idAlice));
+        assertGt(aliceRetained, 0, "v1: alice retains her unclaimed head across the seam");
 
         // ── Phase 2: upgrade — re-point membership to v2 ─────────────────────
         // A token minted mid-interval on v1 must not capture the v1 interval.
@@ -132,11 +135,15 @@ contract MembershipFeeDistributorMigrationTest is Test {
         // (a) v1 entitlements are untouched by the cutover (immutable history).
         assertEq(v1.claimableETH(_idsOf(idAlice)), aliceRetained, "cutover did not alter v1 alice head");
         assertEq(v1.claimableETH(_idsOf(idBob)), v1BobDue, "cutover did not alter v1 bob head");
-        // Alice can still pull her retained v1 balance post-cutover.
+        // Alice can still pull her retained v1 balance post-cutover — exactly once.
         aliceBalBefore = alice.balance;
         vm.prank(alice);
         v1.claimETH(_idsOf(idAlice));
-        assertGt(alice.balance - aliceBalBefore, 0, "v1 retained head is still pull-claimable after cutover");
+        uint256 aliceDragnet = alice.balance - aliceBalBefore;
+        assertGt(aliceDragnet, 0, "v1 retained head is still pull-claimable after cutover");
+        assertEq(aliceDragnet, aliceRetained, "v1 post-cutover claim pays the full retained head; single-drain, no residual");
+        // Bob never claimed, so his v1 head stays settled-untouched too.
+        assertEq(v1.claimableETH(_idsOf(idBob)), v1BobDue, "v1: bob's untouched head survives the cutover");
 
         // (b) v2 starts a fresh accumulator; nothing accrues before its first deposit.
         assertEq(v2.claimableETH(_idsOf(idAlice)), 0, "v2: no accrual before its first deposit");
