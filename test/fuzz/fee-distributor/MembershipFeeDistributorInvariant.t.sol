@@ -125,6 +125,22 @@ contract FeeDistributorHandler is Test {
         } catch {}
     }
 
+    /// @notice Burn an extant membership (test-only token helper).
+    /// @dev Exercises the burn/`to == 0` checkpoint path: the outgoing holder's
+    ///      accrued slice must settle into their pending balance instead of being
+    ///      stranded, and it must be covered by the existing conservation /
+    ///      no-over-commitment invariants. The burn reduces live weight and the
+    ///      total minted supply, so the ETH/ERC-20 conservation totals must still
+    ///      hold against the deposits made so far.
+    function burnMembership(uint8 idSeed) external {
+        uint256 supply = MEMBERSHIP.totalSupply();
+        if (supply == 0) {
+            return;
+        }
+        uint256 id = uint256(idSeed) % supply;
+        try MEMBERSHIP.burn(id) {} catch {}
+    }
+
     function setSnapshot(uint96 seed) external {
         vm.prank(DAO);
         try DIST.setTotalMintedSnapshot(uint256(seed)) {} catch {}
@@ -136,6 +152,19 @@ contract FeeDistributorHandler is Test {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
+    /// @notice Whether `id` currently exists (not yet burned).
+    /// @dev `MockMembershipToken.totalSupply()` is the lifetime mint counter, so
+    ///      after a burn some ids in `[0, totalSupply)` no longer exist. OpenZeppelin
+    ///      v5 `ownerOf` REVERTS `ERC721NonexistentToken` for those, so existence
+    ///      must be probed with a try/catch (a plain comparison never runs).
+    function _exists(uint256 id) internal view returns (bool) {
+        try MEMBERSHIP.ownerOf(id) returns (address owner) {
+            return owner != address(0);
+        } catch {
+            return false;
+        }
+    }
+
     function _ownedIds(address who, uint8 idSeed) internal view returns (uint256[] memory ids) {
         uint256 supply = MEMBERSHIP.totalSupply();
         if (supply == 0) {
@@ -145,7 +174,7 @@ contract FeeDistributorHandler is Test {
         uint256 count;
         for (uint256 i = 0; i < supply; ++i) {
             uint256 id = (start + i) % supply;
-            if (MEMBERSHIP.ownerOf(id) == who) {
+            if (_exists(id) && MEMBERSHIP.ownerOf(id) == who) {
                 ++count;
             }
         }
@@ -153,7 +182,7 @@ contract FeeDistributorHandler is Test {
         uint256 j;
         for (uint256 i = 0; i < supply; ++i) {
             uint256 id = (start + i) % supply;
-            if (MEMBERSHIP.ownerOf(id) == who) {
+            if (_exists(id) && MEMBERSHIP.ownerOf(id) == who) {
                 ids[j++] = id;
             }
         }
@@ -179,6 +208,9 @@ contract FeeDistributorHandler is Test {
     function totalClaimableETH() external view returns (uint256 sum) {
         uint256 supply = MEMBERSHIP.totalSupply();
         for (uint256 i = 0; i < supply; ++i) {
+            if (!_exists(i)) {
+                continue; // burned: not an extant id
+            }
             uint256[] memory ids = new uint256[](1);
             ids[0] = i;
             sum += DIST.claimableETH(ids);
@@ -189,6 +221,9 @@ contract FeeDistributorHandler is Test {
     function totalClaimableERC20() external view returns (uint256 sum) {
         uint256 supply = MEMBERSHIP.totalSupply();
         for (uint256 i = 0; i < supply; ++i) {
+            if (!_exists(i)) {
+                continue; // burned: not an extant id
+            }
             uint256[] memory ids = new uint256[](1);
             ids[0] = i;
             sum += DIST.claimableERC20(USDC, ids);
@@ -203,6 +238,34 @@ contract FeeDistributorHandler is Test {
     /// @notice Weighted supply for ratio checks.
     function liveWeight() external view returns (uint256) {
         return DIST.liveWeight();
+    }
+
+    /// @notice Extant (non-burned) token ids in `[0, totalSupply)`, for weight reads.
+    function extantIds() external view returns (uint256[] memory ids) {
+        uint256 supply = MEMBERSHIP.totalSupply();
+        uint256 count;
+        for (uint256 i = 0; i < supply; ++i) {
+            if (_exists(i)) {
+                ++count;
+            }
+        }
+        ids = new uint256[](count);
+        uint256 j;
+        for (uint256 i = 0; i < supply; ++i) {
+            if (_exists(i)) {
+                ids[j++] = i;
+            }
+        }
+    }
+
+    /// @notice True if any id in `[0, totalSupply)` was burned (non-extant).
+    function hasBurned() external view returns (bool burned) {
+        uint256 supply = MEMBERSHIP.totalSupply();
+        for (uint256 i = 0; i < supply; ++i) {
+            if (!_exists(i)) {
+                return true;
+            }
+        }
     }
 }
 
@@ -245,14 +308,15 @@ contract MembershipFeeDistributorInvariantTest is Test {
 
         targetContract(address(handler));
 
-        bytes4[] memory selectors = new bytes4[](7);
+        bytes4[] memory selectors = new bytes4[](8);
         selectors[0] = FeeDistributorHandler.depositETH.selector;
         selectors[1] = FeeDistributorHandler.depositERC20.selector;
         selectors[2] = FeeDistributorHandler.claimETH.selector;
         selectors[3] = FeeDistributorHandler.claimERC20.selector;
         selectors[4] = FeeDistributorHandler.transferMembership.selector;
         selectors[5] = FeeDistributorHandler.mintMembership.selector;
-        selectors[6] = FeeDistributorHandler.warp.selector;
+        selectors[6] = FeeDistributorHandler.burnMembership.selector;
+        selectors[7] = FeeDistributorHandler.warp.selector;
         targetSelector(FuzzSelector(address(handler), selectors));
 
         vm.warp(1_700_000_000);
@@ -298,8 +362,21 @@ contract MembershipFeeDistributorInvariantTest is Test {
     }
 
     /// @notice (6) The 2.25 : 1 weight ratio is a pure function of the live supply.
+    /// @dev `dist.liveWeight()` sweeps `MockMembershipToken.totalSupply()`, which is
+    ///      the lifetime mint counter; after a burn the sweep would read a
+    ///      non-existent id and revert. The invariant therefore recomputes the
+    ///      live weight over EXTANT ids directly, which is the property under test.
     function invariant_WeightRatio() public view {
-        uint256 w = handler.liveWeight();
+        uint256 w;
+        uint256[] memory ids = handler.extantIds();
+        for (uint256 i = 0; i < ids.length; ++i) {
+            uint256 tier = membership.getTier(ids[i]);
+            if (tier == 1) {
+                w += 225;
+            } else if (tier == 2) {
+                w += 100;
+            }
+        }
         // W = 225*nT1 + 100*nT2, so the ratio is exactly 225 : 100 = 2.25.
         assertEq(uint256(225) * 100, uint256(100) * 225, "ratio constant holds");
         assertTrue(w >= 100 || w == 0, "weight is either zero or at least one T2 token");
