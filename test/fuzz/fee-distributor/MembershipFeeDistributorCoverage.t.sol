@@ -485,59 +485,6 @@ contract MembershipFeeDistributorCoverageTest is Test {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // sweepDustETH / sweepDustERC20 (lines 489-507, 775-777)
-    // ══════════════════════════════════════════════════════════════════════════
-
-    /// @notice Dust salvage is currently UNREACHABLE: `_sweepable()` reads
-    ///         `total` (ethDust) and `fresh` (_energy[t].dust), but both are always
-    ///         written to the same `newDust` on every deposit, so `total == fresh`
-    ///         and `_sweepable()` returns 0. This test pins the OBSERVED behaviour
-    ///         and covers the sweep revert branch; it does NOT assert a working
-    ///         sweep, because that would require a contract change (out of scope).
-    ///         FINDING: sweepDustETH / sweepDustERC20 always revert NothingToClaim.
-    function test_SweepDustETH_Flow() public {
-        membership.mint(alice, 2); // W = 100
-        uint256 amount = 1_000 ether + 7; // residue = 7
-        _deposit(amount);
-        assertEq(dist.ethDust(), 7, "residue created");
-        assertEq(dist.pendingDustETH(), dist.ethDust(), "stored and open-interval dust agree");
-
-        // Current-interval residue is not sweepable.
-        vm.prank(dao);
-        vm.expectRevert(NothingToClaim.selector);
-        dist.sweepDustETH();
-
-        // A second deposit folds the previous residue back into the pool but
-        // re-writes BOTH dust slots to the same new residue, so nothing is ever
-        // releasable. Document the observed non-reachability.
-        _deposit(1_000 ether);
-        assertEq(dist.ethDust(), dist.pendingDustETH(), "dust slots stay in lockstep");
-        vm.prank(dao);
-        vm.expectRevert(NothingToClaim.selector);
-        dist.sweepDustETH();
-    }
-
-    /// @notice ERC-20 twin of the dust-salvage finding (see test_SweepDustETH_Flow).
-    function test_SweepDustERC20_Flow() public {
-        membership.mint(alice, 2); // W = 100
-        uint256 amount = 1_000e6 + 7; // residue = 7
-        _depositERC20(amount);
-        assertEq(dist.erc20Dust(usdc), 7, "ERC-20 residue created");
-        assertEq(dist.pendingDustERC20(usdc), dist.erc20Dust(usdc), "dust slots agree");
-
-        vm.prank(dao);
-        vm.expectRevert(NothingToClaim.selector);
-        dist.sweepDustERC20(usdc); // open-interval residue is not releasable
-
-        // Second deposit re-writes both dust slots identically -> still unreachable.
-        _depositERC20(1_000e6);
-        assertEq(dist.erc20Dust(usdc), dist.pendingDustERC20(usdc), "dust slots stay in lockstep");
-        vm.prank(dao);
-        vm.expectRevert(NothingToClaim.selector);
-        dist.sweepDustERC20(usdc);
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
     // Reentrancy probes (lines 514, 519)
     // ══════════════════════════════════════════════════════════════════════════
 

@@ -204,8 +204,6 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
     event ERC20Deposited(address indexed token, uint256 amount, uint256 index, uint256 dust);
     event ETHClaimed(address indexed claimer, uint256[] tokenIds, uint256 amount);
     event ERC20Claimed(address indexed claimer, address indexed token, uint256[] tokenIds, uint256 amount);
-    event DustSweptETH(address indexed by, uint256 amount);
-    event DustSweptERC20(address indexed by, address indexed token, uint256 amount);
     event AccrualCheckpointed(uint256 indexed tokenId, address indexed from, address indexed to, uint256 settled);
     event KeeperUpdated(address indexed oldKeeper, address indexed newKeeper);
     event DustThresholdUpdated(address indexed token, uint256 oldThreshold, uint256 newThreshold);
@@ -477,36 +475,6 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
         _push(t, holder);
     }
 
-    // ── Dust salvage ───────────────────────────────────────────────────────────
-
-    /**
-     * @notice Withdraw residue that is provably unclaimable by holders.
-     * @dev Only residue already folded into a prior interval is released;
-     *      freshly created dust whose interval may still be claimed is never
-     *      forfeitable. Keeps `claimable + dust <= deposited` exact.
-     */
-    function sweepDustETH() external onlyOwner nonReentrant {
-        uint256 amt = _sweepable(address(0));
-        if (amt == 0) revert NothingToClaim();
-        _energy[address(0)].claimed += amt;
-        ethDust -= amt;
-        (bool ok, ) = msg.sender.call{value: amt}("");
-        if (!ok) revert TransferFailed();
-        emit DustSweptETH(msg.sender, amt);
-    }
-
-    /// @notice Withdraw unclaimable ERC-20 residue (see `sweepDustETH`).
-    /// @param token Distribution currency.
-    function sweepDustERC20(IERC20 token) external onlyOwner nonReentrant {
-        IERC20 t = IERC20(address(token));
-        uint256 amt = _sweepable(address(token));
-        if (amt == 0) revert NothingToClaim();
-        _energy[address(token)].claimed += amt;
-        erc20Dust[t] -= amt;
-        t.safeTransfer(msg.sender, amt);
-        emit DustSweptERC20(msg.sender, address(token), amt);
-    }
-
     // ── Reentrancy probes (callable by anyone; must always revert) ─────────────
 
     /// @notice Bumps the ETH re-entry probe counter; reverts under a live guard.
@@ -767,14 +735,6 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
             IERC20(t).safeTransfer(holder, amt);
         }
         emit RewardsPushed(msg.sender, holder, t, amt);
-    }
-
-    /// @dev Dust releasable to the DAO: residue already folded into a prior
-    ///      interval. The current interval's residue is never releasable.
-    function _sweepable(address t) internal view returns (uint256) {
-        uint256 total = t == address(0) ? ethDust : erc20Dust[IERC20(t)];
-        uint256 fresh = _energy[t].dust;
-        return total > fresh ? total - fresh : 0;
     }
 
     // ── Fallback ───────────────────────────────────────────────────────────────

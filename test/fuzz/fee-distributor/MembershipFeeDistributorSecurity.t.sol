@@ -659,8 +659,6 @@ contract MembershipFeeDistributorSecurityTest is Test {
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bobAddr));
         dist.setTotalMintedSnapshot(1);
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bobAddr));
-        dist.sweepDustETH();
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bobAddr));
         dist.setKeeper(bobAddr);
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", bobAddr));
         dist.setDustThreshold(address(0), 1);
