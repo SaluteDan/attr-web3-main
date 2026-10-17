@@ -21,6 +21,8 @@ import MembershipTokenJSON from "../artifacts/contracts/MembershipToken.sol/Memb
 import MembershipSaleSplitterJSON from "../artifacts/contracts/MembershipSaleSplitter.sol/MembershipSaleSplitter.json" with { type: "json" };
 import MembershipFeeDistributorJSON from "../artifacts/contracts/MembershipFeeDistributor.sol/MembershipFeeDistributor.json" with { type: "json" };
 import PaymentSplitterJSON from "../artifacts/contracts/PaymentSplitter.sol/PaymentSplitter.json" with { type: "json" };
+import ATTROnboardingVaultJSON from "../artifacts/contracts/ATTROnboardingVault.sol/ATTROnboardingVault.json" with { type: "json" };
+import IATTROnboardingVaultJSON from "../artifacts/contracts/interfaces/IATTROnboardingVault.sol/IATTROnboardingVault.json" with { type: "json" };
 import VestingLockCampaignJSON from "../artifacts/contracts/VestingLockCampaign.sol/VestingLockCampaign.json" with { type: "json" };
 import VestingLockCampaignFactoryJSON from "../artifacts/contracts/VestingLockCampaignFactory.sol/VestingLockCampaignFactory.json" with { type: "json" };
 
@@ -33,6 +35,8 @@ export const MembershipTokenABI = MembershipTokenJSON.abi;
 export const MembershipSaleSplitterABI = MembershipSaleSplitterJSON.abi;
 export const MembershipFeeDistributorABI = MembershipFeeDistributorJSON.abi;
 export const PaymentSplitterABI = PaymentSplitterJSON.abi;
+export const ATTROnboardingVaultABI = ATTROnboardingVaultJSON.abi;
+export const IATTROnboardingVaultABI = IATTROnboardingVaultJSON.abi;
 export const VestingLockCampaignABI = VestingLockCampaignJSON.abi;
 export const VestingLockCampaignFactoryABI =
   VestingLockCampaignFactoryJSON.abi;
@@ -46,6 +50,7 @@ export const MembershipTokenBytecode = MembershipTokenJSON.bytecode;
 export const MembershipSaleSplitterBytecode = MembershipSaleSplitterJSON.bytecode;
 export const MembershipFeeDistributorBytecode = MembershipFeeDistributorJSON.bytecode;
 export const PaymentSplitterBytecode = PaymentSplitterJSON.bytecode;
+export const ATTROnboardingVaultBytecode = ATTROnboardingVaultJSON.bytecode;
 export const VestingLockCampaignBytecode = VestingLockCampaignJSON.bytecode;
 export const VestingLockCampaignFactoryBytecode =
   VestingLockCampaignFactoryJSON.bytecode;
