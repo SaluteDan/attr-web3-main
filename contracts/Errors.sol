@@ -42,6 +42,9 @@ error InsufficientPayment(uint256 required, uint256 sent);
 /// @dev ETH forward to receiver failed. [MembershipSaleSplitter, MembershipToken, MembershipFeeDistributor]
 error TransferFailed();
 
+/// @dev The onboarding vault cannot cover the requested grant amount. [ATTROnboardingVault]
+error InsufficientVaultBalance();
+
 /// @dev Claim caller does not own the supplied token ID. [MembershipFeeDistributor]
 error NotTokenOwner(uint256 tokenId);
 

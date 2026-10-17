@@ -32,7 +32,7 @@ contract VestingLockCampaignFuzzTest is Test {
         recipient = makeAddr("recipient");
 
         vm.prank(owner);
-        attr = new ATTRToken(CAP, INITIAL_MINT, treasury);
+        attr = new ATTRToken(treasury);
     }
 
     function _campaign(bool allowEarlyWithdraw, uint256 maxParticipants)
@@ -257,7 +257,7 @@ contract VestingLockCampaignFactoryFuzzTest is Test {
         treasury = makeAddr("treasury");
 
         vm.prank(owner);
-        attr = new ATTRToken(1_000_000_000e18, 100_000_000e18, treasury);
+        attr = new ATTRToken(treasury);
 
         factory = new VestingLockCampaignFactory(owner);
     }

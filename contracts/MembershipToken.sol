@@ -10,7 +10,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
-import "./ATTRToken.sol";
+import "./interfaces/IATTROnboardingVault.sol";
 import "./Errors.sol";
 import "./interfaces/IMintMembership.sol";
 import "./interfaces/IMembershipFeeDistributor.sol";
@@ -30,8 +30,8 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
     address public constant BASE_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     /// @notice Minimum notice for all subsequent tranche price changes.
     uint256 public constant PRICE_NOTICE = 48 hours;
-    /// @notice Liquid welcome-grant token; requires externally granted MINTER_ROLE.
-    ATTRToken public attrToken;
+    /// @notice Autonomous escrow that funds Day-1 liquid welcome grants.
+    IATTROnboardingVault public onboardingVault;
     /// @notice Immutable-after-configuration checkout token.
     IERC20 public usdc;
     mapping(uint256 => uint256) public tierUSDCPrices;
@@ -74,7 +74,7 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
 
     event MembershipMinted(address indexed to, uint256 indexed tokenId, uint256 tier, address paymentToken, uint256 amount);
     event WelcomeGrantIssued(address indexed recipient, uint256 tier, uint256 grantAmount);
-    event PaymentTokensConfigured(address indexed attrToken, address indexed usdc);
+    event PaymentTokensConfigured(address indexed onboardingVault, address indexed usdc);
     event TierUpdated(uint256 indexed tokenId, uint256 newTier);
     event TierPriceUpdated(uint256 indexed tier, address indexed paymentToken, uint256 oldPrice, uint256 newPrice, uint256 effectiveTime);
     event TierPriceQueued(uint256 indexed tier, bool indexed isUSDC, uint256 newPrice, uint256 effectiveTime);
@@ -157,15 +157,17 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
 
     // ── Public Mint ────────────────────────────────────────────────────────────
 
-    /// @notice Bind deployed tokens once. Base mainnet accepts only native USDC.
-    /// @dev ATTR administrator must separately grant this contract MINTER_ROLE.
-    function configurePaymentTokens(address attrToken_, address usdc_) external onlyOwner {
-        if (address(attrToken) != address(0)) revert PaymentTokensAlreadyConfigured();
-        if (attrToken_.code.length == 0 || usdc_.code.length == 0 || attrToken_ == usdc_) revert InvalidPaymentToken();
+    /// @notice Bind the onboarding vault and checkout token once. Base mainnet accepts only native USDC.
+    /// @dev The vault must be pre-authorized to recognize this contract as its MembershipToken.
+    function configurePaymentTokens(address onboardingVault_, address usdc_) external onlyOwner {
+        if (address(onboardingVault) != address(0)) revert PaymentTokensAlreadyConfigured();
+        if (onboardingVault_.code.length == 0 || usdc_.code.length == 0 || onboardingVault_ == usdc_) revert InvalidPaymentToken();
         if (block.chainid == 8453 && usdc_ != BASE_USDC) revert InvalidPaymentToken();
-        attrToken = ATTRToken(attrToken_);
+        // The vault must have authorized this contract as its grant disburser.
+        if (IATTROnboardingVault(onboardingVault_).membershipToken() != address(this)) revert InvalidPaymentToken();
+        onboardingVault = IATTROnboardingVault(onboardingVault_);
         usdc = IERC20(usdc_);
-        emit PaymentTokensConfigured(attrToken_, usdc_);
+        emit PaymentTokensConfigured(onboardingVault_, usdc_);
     }
 
     /// @notice Mint tier 1 or 2 with exact ETH payment and an atomic liquid grant.
@@ -208,7 +210,7 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
 
     /// @notice Check payment configuration, supply and wallet caps, reserving the next token ID.
     function _reservePublicMint(uint256 tier) internal returns (uint256 tokenId) {
-        if (address(attrToken) == address(0)) revert InvalidPaymentToken();
+        if (address(onboardingVault) == address(0)) revert InvalidPaymentToken();
         if (_nextTokenId >= MAX_SUPPLY) revert MaxSupplyExceeded();
         if (_mintedCounts[msg.sender] >= MAX_MINT_PER_WALLET) revert MaxMintPerWalletExceeded();
         tokenId = _nextTokenId++;
@@ -216,15 +218,21 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         tokenTiers[tokenId] = tier;
     }
 
-    /// @notice Complete public mint by minting the NFT and issuing the Day-1 liquid ATTR grant.
+    /// @notice Complete public mint by issuing the Day-1 liquid ATTR grant, then minting the NFT.
+    /// @dev CEI: the grant is disbursed before `_safeMint` so an ERC721 receiver contract executing
+    ///      arbitrary bytecode in `onERC721Received` already holds its welcome tokens. Any failure
+    ///      in the disbursement reverts the whole checkout atomically.
     function _completePublicMint(uint256 tokenId, uint256 tier, string memory metadataURI,
         address paymentToken, uint256 price) internal
     {
+        // 1. Disburse ATTR grant first so recipient has balance upon receiving NFT
+        uint256 grant = tier == 1 ? 2500 ether : 1000 ether;
+        onboardingVault.disburseGrant(msg.sender, grant);
+        emit WelcomeGrantIssued(msg.sender, tier, grant);
+
+        // 2. Mint ERC721 and set URI (receiver callback happens here)
         _safeMint(msg.sender, tokenId);
         _setTokenURI(tokenId, metadataURI);
-        uint256 grant = tier == 1 ? 2500 ether : 1000 ether;
-        attrToken.mint(msg.sender, grant);
-        emit WelcomeGrantIssued(msg.sender, tier, grant);
         emit MembershipMinted(msg.sender, tokenId, tier, paymentToken, price);
     }
 

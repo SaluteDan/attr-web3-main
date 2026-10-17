@@ -43,12 +43,14 @@ contract HookUSDC is MockMembershipUSDC {
     }
 }
 
-/// @notice Grant-token callback probe; membership still holds its reentrancy lock.
+/// @notice Grant-vault callback probe; membership still holds its reentrancy lock.
 contract HookGrant {
     MembershipToken internal target;
     bytes public lastError;
     function arm(MembershipToken target_) external { target = target_; }
-    function mint(address, uint256) external {
+    /// @notice Mirrors the vault getter so the membership's authorization check passes.
+    function membershipToken() external view returns (address) { return address(target); }
+    function disburseGrant(address, uint256) external {
         (bool ok, bytes memory reason) = address(target).call(abi.encodeCall(target.mintMembership, (1, "attack")));
         require(!ok, "reentry succeeded"); lastError = reason;
     }
@@ -77,7 +79,8 @@ contract MembershipTokenSecurityTest is QAMembershipTokenTest {
     function hookCheckout(bool atPermit) internal {
         HookUSDC hook = new HookUSDC();
         membership = new MembershipToken("ATTR-MEMBER-ID", "ATTR#", address(this), treasury, treasury, 500, "", 50000, 2);
-        membership.configurePaymentTokens(address(attr), address(hook)); attr.grantRole(attr.MINTER_ROLE(), address(membership));
+        vault.setMembershipToken(address(membership));
+        membership.configurePaymentTokens(address(vault), address(hook));
         hook.arm(membership, atPermit); hook.mint(buyer, 1000e6); usdc = hook;
         mintUSDC(1, KEY, 0, block.timestamp + 1 days, usdc.DOMAIN_SEPARATOR());
         assertEq(bytes4(hook.lastError()), GUARD); assertEq(usdc.balanceOf(treasury), USDC_PRICE);
@@ -87,7 +90,7 @@ contract MembershipTokenSecurityTest is QAMembershipTokenTest {
     function test_GrantCallbackReentry() public {
         HookGrant hook = new HookGrant();
         MembershipToken fresh = new MembershipToken("ATTR-MEMBER-ID", "ATTR#", address(this), treasury, treasury, 500, "", 50000, 2);
-        fresh.configurePaymentTokens(address(hook), address(usdc)); hook.arm(fresh);
+        hook.arm(fresh); fresh.configurePaymentTokens(address(hook), address(usdc));
         vm.prank(buyer); fresh.mintMembership{value: ETH_PRICE}(1, "x");
         assertEq(bytes4(hook.lastError()), GUARD);
     }
@@ -109,7 +112,7 @@ contract MembershipTokenSecurityTest is QAMembershipTokenTest {
     }
     function test_BaseMainnetRejectsNoncanonicalUSDC() public {
         MembershipToken fresh = new MembershipToken("x", "x", address(this), treasury, treasury, 0, "", 50000, 2);
-        vm.chainId(8453); vm.expectRevert(InvalidPaymentToken.selector); fresh.configurePaymentTokens(address(attr), address(usdc));
+        vm.chainId(8453); vm.expectRevert(InvalidPaymentToken.selector); fresh.configurePaymentTokens(address(vault), address(usdc));
     }
     function test_UnconfiguredCheckoutFailsClosed() public {
         MembershipToken fresh = new MembershipToken("x", "x", address(this), treasury, treasury, 0, "", 50000, 2);
@@ -159,7 +162,7 @@ contract MembershipTokenSecurityTest is QAMembershipTokenTest {
         calls[7] = abi.encodeCall(membership.withdrawPayments, ());
         calls[8] = abi.encodeCall(membership.pause, ());
         calls[9] = abi.encodeCall(membership.unpause, ());
-        calls[10] = abi.encodeCall(membership.configurePaymentTokens, (address(attr), address(usdc)));
+        calls[10] = abi.encodeCall(membership.configurePaymentTokens, (address(vault), address(usdc)));
         address[] memory recipients = new address[](0);
         uint256[] memory tiers = new uint256[](0);
         string[] memory uris = new string[](0);
