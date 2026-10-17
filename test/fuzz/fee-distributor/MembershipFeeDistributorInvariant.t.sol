@@ -146,6 +146,20 @@ contract FeeDistributorHandler is Test {
         try DIST.setTotalMintedSnapshot(uint256(seed)) {} catch {}
     }
 
+    /// @notice Re-label an extant membership to tier 0 (weightless). Exercises
+    ///         the T0 exclusion path and the mid-interval tier-change clamp.
+    function zeroTier(uint8 idSeed) external {
+        uint256 supply = MEMBERSHIP.totalSupply();
+        if (supply == 0) {
+            return;
+        }
+        uint256 id = uint256(idSeed) % supply;
+        if (!_exists(id)) {
+            return;
+        }
+        try MEMBERSHIP.updateTier(id, 0) {} catch {}
+    }
+
     function warp(uint32 secondsSeed) external {
         vm.warp(block.timestamp + (uint256(secondsSeed) % 2 days) + 1);
     }
@@ -204,8 +218,16 @@ contract FeeDistributorHandler is Test {
         lastErc20Index = idx;
     }
 
-    /// @notice Sum of currently-claimable ETH over all extant token ids.
+    /// @notice Sum of currently-claimable ETH over all extant token ids PLUS each
+    ///         actor's already-settled per-address pending balance.
+    /// @dev The `claimableETH` view only reflects each token's UNSETTLED accrual;
+    ///      value already checkpointed into `pendingClaims` (transfers, burns) is
+    ///      held separately and MUST be counted, or the conservation invariant
+    ///      would falsely read a shortfall after any transfer/burn.
     function totalClaimableETH() external view returns (uint256 sum) {
+        for (uint256 a = 0; a < actors.length; ++a) {
+            sum += DIST.pendingClaim(address(0), actors[a]);
+        }
         uint256 supply = MEMBERSHIP.totalSupply();
         for (uint256 i = 0; i < supply; ++i) {
             if (!_exists(i)) {
@@ -217,8 +239,12 @@ contract FeeDistributorHandler is Test {
         }
     }
 
-    /// @notice Sum of currently-claimable ERC-20 over all extant token ids.
+    /// @notice Sum of currently-claimable ERC-20 over all extant token ids PLUS
+    ///         each actor's already-settled per-address pending balance.
     function totalClaimableERC20() external view returns (uint256 sum) {
+        for (uint256 a = 0; a < actors.length; ++a) {
+            sum += DIST.pendingClaim(address(USDC), actors[a]);
+        }
         uint256 supply = MEMBERSHIP.totalSupply();
         for (uint256 i = 0; i < supply; ++i) {
             if (!_exists(i)) {
@@ -308,7 +334,7 @@ contract MembershipFeeDistributorInvariantTest is Test {
 
         targetContract(address(handler));
 
-        bytes4[] memory selectors = new bytes4[](8);
+        bytes4[] memory selectors = new bytes4[](9);
         selectors[0] = FeeDistributorHandler.depositETH.selector;
         selectors[1] = FeeDistributorHandler.depositERC20.selector;
         selectors[2] = FeeDistributorHandler.claimETH.selector;
@@ -317,6 +343,7 @@ contract MembershipFeeDistributorInvariantTest is Test {
         selectors[5] = FeeDistributorHandler.mintMembership.selector;
         selectors[6] = FeeDistributorHandler.burnMembership.selector;
         selectors[7] = FeeDistributorHandler.warp.selector;
+        selectors[8] = FeeDistributorHandler.zeroTier.selector;
         targetSelector(FuzzSelector(address(handler), selectors));
 
         vm.warp(1_700_000_000);
@@ -342,18 +369,28 @@ contract MembershipFeeDistributorInvariantTest is Test {
         assertLe(handler.totalClaimableERC20(), usdc.balanceOf(address(dist)), "ERC20 over-commitment");
     }
 
-    /// @notice (4) T0 exclusion: a wallet holding no membership can never claim.
+    /// @notice (4) T0 exclusion: a weightless (tier-0) membership can never
+    ///         accrue, and an address that is never a holder can never be paid.
+    /// @dev Non-tautological: it reads the distributor's ACTUAL claimable/pending
+    ///      surface for weightless ids and for non-holder addresses, rather than
+    ///      re-asserting the token balance it already tested.
     function invariant_TierZeroExcluded() public view {
-        for (uint256 i = 0; i < 4; ++i) {
-            address actor = handler.actor(i);
-            if (membership.balanceOf(actor) == 0) {
-                uint256[] memory ids = new uint256[](1);
-                ids[0] = 0;
-                // With no owned ids the caller cannot construct a valid claim;
-                // structurally, payout requires an owned token id.
-                assertEq(membership.balanceOf(actor), 0, "T0 wallet unexpectedly holds a token");
+        uint256[] memory ids = handler.extantIds();
+        for (uint256 i = 0; i < ids.length; ++i) {
+            uint256 id = ids[i];
+            if (membership.getTier(id) == 0) {
+                uint256[] memory one = new uint256[](1);
+                one[0] = id;
+                assertEq(dist.claimableETH(one), 0, "T0 id accrued ETH");
+                assertEq(dist.claimableERC20(usdc, one), 0, "T0 id accrued ERC20");
             }
         }
+        // The DAO (owner, never a holder) and the handler itself never accrue a
+        // payout in either currency.
+        assertEq(dist.pendingClaim(address(0), dao), 0, "DAO accrued ETH payout");
+        assertEq(dist.pendingClaim(address(usdc), dao), 0, "DAO accrued ERC20 payout");
+        assertEq(dist.pendingClaim(address(0), address(handler)), 0, "handler accrued ETH payout");
+        assertEq(dist.pendingClaim(address(usdc), address(handler)), 0, "handler accrued ERC20 payout");
     }
 
     /// @notice (5) Reward indices are monotonic non-decreasing.

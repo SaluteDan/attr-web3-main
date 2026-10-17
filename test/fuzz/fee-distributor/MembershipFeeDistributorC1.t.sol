@@ -156,6 +156,37 @@ contract MembershipFeeDistributorC1Test is Test {
         assertEq(usdc.balanceOf(address(dist)), D - pool, "only dust remains");
     }
 
+    // ── Interrupted deposit must carry the unvested remainder (CR comment) ─────
+
+    /// @notice A second deposit BEFORE the first interval's `WINDOW` elapsed must
+    ///         not strand the unvested remainder of the first pool. `_closeInterval`
+    ///         returns the un-vested share and the next deposit folds it into its
+    ///         own pool, so after the second window the holder's total claims equal
+    ///         total deposits minus the open dust (nothing left behind).
+    function test_InterruptedDeposit_CarriesUnvested() public {
+        uint256 aliceId = membership.mint(alice, 1);
+        _deposit(D); // interval 1 opens; pool1 = D - (D % 225)
+        uint256 pool1 = _pool(D, 225);
+
+        // Interrupt interval 1 halfway through: only half of pool1 vests into the
+        // cumulative; the other half is the "unvested remainder" under test.
+        vm.warp(block.timestamp + WINDOW / 2);
+        _deposit(D); // closes interval 1 and carries the remainder into pool2
+
+        // Let interval 2 fully elapse, then the sole holder claims everything.
+        vm.warp(block.timestamp + WINDOW);
+        vm.prank(alice);
+        dist.claimETH(_one(aliceId));
+        uint256 claimed = aliceC.received();
+
+        // Nothing stranded: total claims == total deposits - open dust.
+        assertApproxEqAbs(claimed, 2 * D - dist.ethDust(), 4, "unvested remainder was stranded");
+        // The carried remainder makes the total exceed a single interval's pool.
+        assertGt(claimed, pool1, "carry must lift claims above one pool");
+        // Only the carried dust is left in the contract.
+        assertEq(address(dist).balance, dist.ethDust(), "only dust should remain");
+    }
+
     // ── Burn must settle the outgoing holder (no stranding, no ownerOf revert) ─
 
     function test_BurnSettlesHolder() public {

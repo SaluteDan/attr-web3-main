@@ -260,12 +260,12 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
      */
     function depositETH() external payable onlyOwner nonReentrant {
         if (msg.value == 0) revert ZeroDeposit();
-        _closeInterval(address(0));
+        uint256 carry = _closeInterval(address(0));
         uint256 W = _liveWeight();
         if (W == 0 || totalMintedSnapshot == 0) revert InvalidMaxSupply();
 
         uint256 swept = ethDust;
-        uint256 distributable = msg.value + swept;
+        uint256 distributable = msg.value + swept + carry;
         // slither-disable-next-line divide-before-multiply
         uint256 newDust = distributable % W;
         uint256 delta = distributable - newDust;
@@ -292,7 +292,7 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
         if (amount == 0) revert ZeroDeposit();
         address t = address(token);
         if (t == address(0)) revert ZeroAddress();
-        _closeInterval(t);
+        uint256 carry = _closeInterval(t);
         uint256 W = _liveWeight();
         if (W == 0 || totalMintedSnapshot == 0) revert InvalidMaxSupply();
 
@@ -302,7 +302,7 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
         if (received == 0) revert ZeroDeposit();
 
         uint256 swept = erc20Dust[token];
-        uint256 distributable = received + swept;
+        uint256 distributable = received + swept + carry;
         uint256 newDust = distributable % W;
         uint256 delta = distributable - newDust;
 
@@ -649,13 +649,22 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
         if (w > iw) w = iw;
     }
 
-    /// @dev Close the open interval: fold its rate into the finalised cumulative.
-    function _closeInterval(address t) internal {
+    /// @dev Close the open interval: fold its rate into the finalised cumulative
+    ///      and RETURN the pool share that did not vest within `elapsed` (an
+    ///      interrupted interval closed before `WINDOW`). That unvested remainder
+    ///      is carried into the next deposit's pool instead of being stranded in
+    ///      the contract (invariant: `sum(claims) + dust == sum(deposits)`).
+    function _closeInterval(address t) internal returns (uint256 carry) {
         Energy storage e = _energy[t];
         if (e.intervalWeight != 0 && e.pricePerWeight != 0) {
             uint256 elapsed = block.timestamp - e.lastUpdate;
             if (elapsed > WINDOW) elapsed = WINDOW;
-            e.cumReward += _rate(e.pricePerWeight, e.intervalWeight) * elapsed;
+            uint256 r = _rate(e.pricePerWeight, e.intervalWeight);
+            e.cumReward += r * elapsed;
+            uint256 vested = (r * elapsed * e.intervalWeight) / ONE;
+            if (e.pricePerWeight > vested) {
+                carry = e.pricePerWeight - vested;
+            }
         }
         e.pricePerWeight = 0;
     }
