@@ -206,4 +206,102 @@ contract MembershipFeeDistributorC1Test is Test {
         dist.claimPendingETH();
         assertEq(aliceC.received(), pool / 2, "holder claims post-burn");
     }
+
+    // ── Tier CHANGE between deposits must not re-price history (C-1 variant) ───
+    //
+    // A token's tier (hence weight) can be re-labelled by the membership owner
+    // WITHOUT notifying the distributor, so a later deposit runs `_freezeBasis`
+    // with a different `_weightOf(i)`. A plain debt re-base would silently
+    // re-price ALL historical intervals at the new weight (over-claim on an
+    // upgrade, under-claim on a downgrade). The `_carried` buffer preserves the
+    // historical slice at the OLD weight and adds it back on claim.
+
+    /// @notice Tier 2 -> Tier 1 between deposits: the holder must receive the
+    ///         Tier-2 share for interval 1 PLUS the Tier-1 share for interval 2
+    ///         — never the whole history re-priced at the Tier-1 weight.
+    function test_TierUpgrade_PreservesHistoricalAccrual() public {
+        uint256 aliceId = membership.mint(alice, 2); // Tier 2 (weight 100)
+
+        // Absolute warps (repo convention): a chained relative
+        // `vm.warp(block.timestamp + WINDOW)` is not reliable under via_ir and
+        // can silently no-op, which would hide the interval-2 accrual.
+        uint256 t0 = block.timestamp;
+
+        _deposit(D); // interval 1 opens at t0, W = 100
+        uint256 pool1 = dist.ethPricePerWeight();
+        assertEq(pool1, _pool(D, 100), "interval-1 pool");
+
+        vm.warp(t0 + WINDOW); // interval 1 fully vests at weight 100
+
+        membership.updateTier(aliceId, 1); // silent Tier 2 -> Tier 1 (weight 225)
+
+        _deposit(D); // interval 2 opens, W = 225
+        uint256 pool2 = dist.ethPricePerWeight();
+        uint256 cum2 = dist.ethCumReward(); // finalised cumulative through interval 1
+
+        vm.warp(t0 + 2 * WINDOW); // interval 2 fully vests at weight 225
+
+        // Sole holder: interval-1 share at the OLD weight (T2 = 100) + the FULL
+        // interval-2 pool at the NEW weight (T1 = 225). A naive debt re-base
+        // would instead price interval 1 at 225 (over-claim).
+        uint256 share1 = (100 * cum2) / 1e18;
+        uint256 expected = share1 + pool2;
+
+        // `_peek` must also report the carried historical slice.
+        assertEq(dist.claimableETH(_one(aliceId)), expected, "peek must include carried accrual");
+
+        vm.prank(alice);
+        dist.claimETH(_one(aliceId));
+
+        assertEq(aliceC.received(), expected, "upgrade must preserve the historical Tier-2 share");
+        // The historical slice is priced at T2 (<= the interval-1 pool), NOT at
+        // the upgraded T1 weight (which would be ~2.25x the pool).
+        assertLt(share1, pool1, "historical slice must stay at the old T2 weight");
+        // Nothing over-claimed: balance equals exactly the remaining liabilities (dust).
+        assertEq(address(dist).balance, dist.ethDust(), "distributor balance == remaining liabilities");
+        assertLe(aliceC.received(), 2 * D, "claims must not exceed total deposits");
+    }
+
+    /// @notice Tier 1 -> Tier 2 between deposits: the holder must receive the
+    ///         Tier-1 share for interval 1 PLUS the Tier-2 share for interval 2;
+    ///         a naive re-base would erase the higher historical slice (lost funds).
+    function test_TierDowngrade_PreservesHistoricalAccrual() public {
+        uint256 aliceId = membership.mint(alice, 1); // Tier 1 (weight 225)
+
+        // Absolute warps (see the upgrade test for why).
+        uint256 t0 = block.timestamp;
+
+        _deposit(D); // interval 1 opens at t0, W = 225
+        uint256 pool1 = dist.ethPricePerWeight();
+        assertEq(pool1, _pool(D, 225), "interval-1 pool");
+
+        vm.warp(t0 + WINDOW); // interval 1 fully vests at weight 225
+
+        membership.updateTier(aliceId, 2); // silent Tier 1 -> Tier 2 (weight 100)
+
+        _deposit(D); // interval 2 opens, W = 100
+        uint256 pool2 = dist.ethPricePerWeight();
+        uint256 cum2 = dist.ethCumReward(); // finalised cumulative through interval 1
+
+        vm.warp(t0 + 2 * WINDOW); // interval 2 fully vests at weight 100
+
+        // Sole holder: interval-1 share at the OLD weight (T1 = 225) + the FULL
+        // interval-2 pool at the NEW weight (T2 = 100). A naive re-base would
+        // erase ~45% of the historical slice (silent loss of funds).
+        uint256 share1 = (225 * cum2) / 1e18;
+        uint256 expected = share1 + pool2;
+
+        assertEq(dist.claimableETH(_one(aliceId)), expected, "peek must include carried accrual");
+
+        vm.prank(alice);
+        dist.claimETH(_one(aliceId));
+
+        assertEq(aliceC.received(), expected, "downgrade must not lose the historical Tier-1 share");
+        // The historical slice is priced at the old T1 weight, NOT the downgraded
+        // T2 weight (which would drop it to 100/225 of its value).
+        assertGt(share1, (100 * cum2) / 1e18, "historical slice must stay at the old T1 weight");
+        // No funds stranded: everything not owed to a holder is only dust.
+        assertEq(address(dist).balance, dist.ethDust(), "no funds lost on downgrade");
+        assertLe(aliceC.received(), 2 * D, "claims must not exceed total deposits");
+    }
 }

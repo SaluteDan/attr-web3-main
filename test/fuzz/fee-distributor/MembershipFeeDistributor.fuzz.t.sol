@@ -198,7 +198,10 @@ contract MembershipFeeDistributorFuzzTest is Test {
         uint256 b = membership.mint(second, 2); // W = 200 at deposit
         _deposit(D);
         membership.updateTier(a, 1); // a relabelled T1 AFTER the interval opened
-        vm.warp(block.timestamp + WINDOW);
+        // Absolute warps (repo convention): a chained relative `block.timestamp +
+        // WINDOW` warp is not reliable under via_ir and can silently no-op — which
+        // would leave interval 2 unadvanced and wrongly make `a` and `b` equal.
+        vm.warp(1_700_000_000 + WINDOW);
         uint256 dueA = dist.claimableETH(_idsOf(a));
         uint256 dueB = dist.claimableETH(_idsOf(b));
         // Both were T2 when the interval opened: equal basis, no re-pricing.
@@ -206,7 +209,7 @@ contract MembershipFeeDistributorFuzzTest is Test {
         assertLe(dueA + dueB, D, "shares never exceed the deposit");
         // The upgrade takes effect for the NEXT interval opened after it.
         _deposit(D);
-        vm.warp(block.timestamp + WINDOW);
+        vm.warp(1_700_000_000 + 2 * WINDOW);
         assertGt(
             dist.claimableETH(_idsOf(a)),
             dist.claimableETH(_idsOf(b)),

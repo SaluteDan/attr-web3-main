@@ -150,6 +150,15 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
     /// @dev currency => tokenId => settled cumulative-per-weight (scaled 1e18).
     mapping(address => mapping(uint256 => uint256)) private _debt;
 
+    /// @dev currency => tokenId => value accrued at an earlier weight, not yet credited.
+    ///      When a token's tier (and therefore its weight) changes between deposits,
+    ///      the historical intervals it earned under the OLD weight would otherwise
+    ///      be re-priced at the NEW weight by `_accruedAt` (which multiplies the
+    ///      current weight by the shared `cumReward` accumulator). `_freezeBasis`
+    ///      moves that already-earned-but-unsettled slice here before re-basing the
+    ///      debt to the new weight, and `_settleTo`/`_peek` add it back on claim.
+    mapping(address => mapping(uint256 => uint256)) private _carried;
+
     /// @dev currency => tokenId => weight basis frozen for the current interval.
     ///      Prevents a mid-interval tier change from re-pricing value already
     ///      partially settled in the same interval (no retroactive re-price).
@@ -332,16 +341,27 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
         uint256 sum;
         for (uint256 i = 0; i < supply; ++i) {
             uint256 w = _weightOf(i);
-            // C-1: a token joining the weighted set for the FIRST time must not
-            // claim value that accrued while it was absent. A token is "newly
-            // enrolled" when it had ZERO weight in the previous interval and has
-            // non-zero weight now. Re-base its debt to the closed-interval
-            // cumulative so `owed - debt` excludes all prior intervals.
-            //
-            // A CONTINUOUS holder (non-zero weight last interval) keeps their
-            // debt untouched: re-basing for them would erase their unsettled
-            // closed-interval claim (the C-1 regression).
-            if (w != 0 && !_enrolledPrev[t][i]) {
+            // Weight of the interval that was just closed (0 if the token was
+            // absent from it). `_enrolledPrev` gates on non-zero weight.
+            uint256 prevW = _enrolledPrev[t][i] ? _basisWeight[t][i] : 0;
+            if (w != prevW) {
+                // The token's weight changed across the interval boundary. Two
+                // distinct cases collapse into one:
+                //   - newly enrolled (prevW == 0, w != 0): re-base debt to the
+                //     closed-interval cumulative so prior intervals are excluded
+                //     (the C-1 fix).
+                //   - weight CHANGED (Tier 2 -> Tier 1, or the reverse, or to 0):
+                //     it earned the just-closed interval at `prevW`, but a plain
+                //     debt re-base would silently re-price that historical slice
+                //     at `w`. Carry the unsettled OLD-weight remainder first, then
+                //     re-base so future intervals earn at `w`.
+                if (prevW != 0) {
+                    uint256 owedOld = (prevW * e.cumReward) / ONE;
+                    uint256 d = _debt[t][i];
+                    if (owedOld > d) {
+                        _carried[t][i] += owedOld - d;
+                    }
+                }
                 _debt[t][i] = (w * e.cumReward) / ONE;
             }
             _basisWeight[t][i] = w;
@@ -705,11 +725,21 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
     ///      Returns the freshly-credited (non-dust) amount.
     function _settleTo(address t, uint256 tokenId, address from) internal returns (uint256 fresh) {
         uint256 w = _frozenWeight(t, tokenId);
-        if (w == 0) return 0;
+        uint256 carried = _carried[t][tokenId];
+        if (carried != 0) {
+            _carried[t][tokenId] = 0;
+        }
+        if (w == 0) {
+            if (carried >= DUST_FLOOR) {
+                pendingClaims[t][from] += carried;
+            }
+            return carried;
+        }
         uint256 owed = _accruedAt(t, w, block.timestamp);
         uint256 debt = _debt[t][tokenId];
         fresh = owed > debt ? owed - debt : 0;
         _debt[t][tokenId] = owed; // re-base: the buyer starts from zero
+        fresh += carried;
         if (fresh >= DUST_FLOOR) {
             pendingClaims[t][from] += fresh;
         }
@@ -724,10 +754,12 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
     /// @dev View twin of `_settleTo` (never writes).
     function _peek(address t, uint256 tokenId, Energy storage) private view returns (uint256 fresh) {
         uint256 w = _frozenWeightView(t, tokenId);
-        if (w == 0) return 0;
+        uint256 carried = _carried[t][tokenId];
+        if (w == 0) return carried;
         uint256 owed = _accruedAt(t, w, block.timestamp);
         uint256 debt = _debt[t][tokenId];
         fresh = owed > debt ? owed - debt : 0;
+        fresh += carried;
     }
 
     /// @dev Keeper-gated push of a holder's already-accrued balance (ETH or ERC-20).
