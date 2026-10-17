@@ -13,6 +13,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "./ATTRToken.sol";
 import "./Errors.sol";
 import "./interfaces/IMintMembership.sol";
+import "./interfaces/IMembershipFeeDistributor.sol";
 
 /**
  * @title MembershipToken
@@ -63,6 +64,12 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
     /// @notice Receiver for ETH proceeds from `mintMembership`.
     address public paymentReceiver;
 
+    /// @notice Registered fee distributor notified on every real transfer (0 = none).
+    /// @dev Implements the F-1 transfer checkpoint: on transfer the distributor
+    ///      settles the seller's holding-period accrual and re-bases the buyer's
+    ///      clock. Set via {setFeeDistributor} (owner only).
+    address public feeDistributor;
+
     // ── Events ─────────────────────────────────────────────────────────────────
 
     event MembershipMinted(address indexed to, uint256 indexed tokenId, uint256 tier, address paymentToken, uint256 amount);
@@ -74,6 +81,7 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
     event PaymentReceived(address indexed from, uint256 amount, uint256 tier);
     event PaymentReceiverUpdated(address indexed oldReceiver, address indexed newReceiver);
     event ContractURIUpdated(string oldURI, string newURI);
+    event FeeDistributorSet(address indexed oldDistributor, address indexed newDistributor);
 
     // ── Constructor ────────────────────────────────────────────────────────────
 
@@ -131,6 +139,20 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         string memory oldURI = _contractURI;
         _contractURI = newURI;
         emit ContractURIUpdated(oldURI, newURI);
+    }
+
+    // ── Fee distributor wiring ─────────────────────────────────────────────────
+
+    /**
+     * @notice Register (or clear) the fee distributor notified on every transfer.
+     * @dev Owner only. Pass `address(0)` to disable the checkpoint hook. The
+     *      distributor MUST expose `checkpoint(uint256,address,address)`.
+     * @param distributor Fee distributor address (0 disables notifications).
+     */
+    function setFeeDistributor(address distributor) external onlyOwner {
+        address old = feeDistributor;
+        feeDistributor = distributor;
+        emit FeeDistributorSet(old, distributor);
     }
 
     // ── Public Mint ────────────────────────────────────────────────────────────
@@ -379,7 +401,16 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         override(ERC721, ERC721Votes)
         returns (address)
     {
-        return super._update(to, tokenId, auth);
+        address from = super._update(to, tokenId, auth);
+        // F-1 transfer checkpoint: settle the outgoing holder's accrual and
+        // re-base the incoming holder's clock. Notifies on transfer AND burn
+        // (`to == 0`) so a burned token settles the holder's slice; skips mint
+        // (`from == 0`) and self-transfer. `checkpoint` also guards `from == to`.
+        address dist = feeDistributor;
+        if (dist != address(0) && from != address(0) && from != to) {
+            IMembershipFeeDistributor(dist).checkpoint(tokenId, from, to);
+        }
+        return from;
     }
 
     function _increaseBalance(address account, uint128 value)
