@@ -50,6 +50,7 @@
     "pack:dry-run": "npm pack --dry-run",
     "verify:contract": "node bin/verify-contract.cjs",
     "check:balance": "hardhat run scripts/check/balance.ts",
+    "deploy:all": "hardhat run scripts/deploy/all.ts",
     "deploy:token": "hardhat run scripts/deploy/token.ts",
     "deploy:factory": "hardhat run scripts/deploy/factory.ts",
     "deploy:vesting-factory": "hardhat run scripts/deploy/vestingFactory.ts",

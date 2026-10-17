@@ -1,218 +1,216 @@
-# ATTR Web3 Lib
+# ATTR Web3 Contracts & Protocol SDK
 
-Smart contracts, contract tests, deployment scripts, and Basescan verification command for ATTR.
+Smart contracts, testing harnesses, deployment tooling, and Basescan verification scripts for the ATTR protocol on Base.
 
-## Setup
+---
 
-**Repo development** requires **Node `>=22.13.0`** (Hardhat v3 does not support
-Node 20 — enforced via `devEngines` and `.nvmrc`).
+## 1. Setup & Requirements
+
+### Repo Development & CI
+* **Node.js**: `>=22.13.0` (Hardhat v3 requirement — enforced via `devEngines` and `.nvmrc`).
+* **Package Manager**: npm.
+* **Toolchains**: Hardhat v3 (`@nomicfoundation/hardhat-viem`) + Foundry (`forge`).
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-### Runtime requirement (consumers)
+### Published Runtime (SDK Consumers)
+The published npm package (`attr-web3` / `dist/src/index.js`) exports compiled contract ABIs, bytecode, and Viem TypeScript interfaces.
+* `engines.node`: `>=18.20.0` (native import attributes `with { type: "json" }`).
+* Consumers on Node 20 (`attr-backend`, `frontend-ui`) install cleanly with zero `EBADENGINE` warnings.
 
-The **published package** (`dist/src/index.js`, the ABIs/bytecode entry point)
-has a much lower floor: `engines.node` is `>=18.20.0`. It is plain ESM — JSON
-imports via import attributes plus `export const` object literals — and pulls in
-no Hardhat and no Node 20+/22-only APIs. Node ≥18.20 is the minimum that parses
-`import … with { type: "json" }` natively (import attributes landed in Node
-18.20; 18.0–18.19 would throw a syntax error). Consumers on Node 20 (`attr-backend`,
-`frontend-ui`) install with no `EBADENGINE` warning.
+---
 
-| Context | Node floor | Why |
-| --- | --- | --- |
-| Published runtime (`engines.node`) | `>=18.20.0` | compiled ABIs/bytecode ESM only |
-| Repo dev / CI (`devEngines`, `.nvmrc`, CI pin) | `>=22.13.0` | Hardhat v3 requires it |
-
-## Common Commands
+## 2. Common Development Commands
 
 ```bash
-npm run compile
-npm test
-npm run test:contracts
-npm run test:fuzz
-npm run lint:sol
-npm run gate
-npm run slither
-npm run gas:check
-npm run verify:contract
+# Compilation
+npm run compile        # Hardhat compile (Cancun, viaIR, 200 optimizer runs)
+forge build            # Foundry compile
+
+# Testing
+npm test               # Run Hardhat TypeScript test suite
+npm run test:contracts # Run Hardhat tests
+npm run test:fuzz      # Run Foundry fuzz & invariant test suite
+npm run gate           # Pre-PR gate: compile + test:contracts + lint:sol
+
+# Analysis & Benchmarks
+npm run lint:sol       # Solhint Solidity linter
+npm run slither        # Slither static analyzer
+npm run gas:check      # Check gas snapshot drift (report-only)
+
+# Deployment
+npm run deploy:all     # Single-run deployment & wiring of the full protocol suite
+npm run verify:contract # Basescan source code verification helper
 ```
 
-`npm run gate` (compile + unit tests + Solidity lint) is the pre-PR check. CI,
-the Slither baseline, gas snapshots, and the coverage limitation are documented
-in [`docs/test/CI_AND_GATES.md`](docs/test/CI_AND_GATES.md).
+---
 
-The backend calls `npm run verify:contract` with a JSON payload on stdin. This repo owns the local Hardhat configuration and contract sources used for Basescan verification.
+## 3. Contract Ecosystem Overview
 
-When installed as a package dependency, the backend calls the
-`attr-web3-verify-contract` binary from `node_modules/.bin`.
+| Contract | Category | Description | Access / Governance |
+|---|---|---|---|
+| **`ATTRToken.sol`** | Core Token | Native $ATTR ERC-20 utility & governance token (`ERC20Burnable`, `ERC20Capped`, `ERC20Permit`, `ERC20Votes`). Fixed immutable cap of 1,000,000,000 ATTR minted at deploy. | **Immutable**: No `MINTER_ROLE`, no `mint()`, no admin keys. |
+| **`ATTROnboardingVault.sol`** | Treasury Escrow | Autonomous escrow vault holding the 150,000,000 ATTR welcome-grant pool. Only `MembershipToken` may call `disburseGrant`. | **DAO Timelock / Multisig** (`Ownable`) with timelocked emergency rescue. |
+| **`MembershipToken.sol`** | Membership NFT | Tiered membership collection (Tier 1 & Tier 2) with 50,000 hard collection cap (`MAX_SUPPLY`). Supports dual ETH & native USDC checkout, stepped pricing tranches, and immediate liquid welcome grants (2,500 T1 / 1,000 T2 ATTR). | **Platform Admin / DAO** (`Ownable`). |
+| **`MembershipFeeDistributor.sol`** | Revenue Sharing | Tier-weighted (T1 = 225, T2 = 100), transfer-aware continuous fee-sharing engine for ETH and ERC-20s. Payouts use frozen interval denominators. (*Phase 2 Platform Volume Share — Day 1 deferred*). | **DAO Owner** (`Ownable`) + authorized keeper for thresholded pushes. |
+| **`ATTRDeployer.sol`** | Creator Factory | Factory for deploying creator `NFTCollection` contracts and revenue `PaymentSplitter` contracts. Auto-authorizes deployed collections in `ATTRSpender`. | **Platform Admin / Backend** (`Ownable`). |
+| **`ATTRSpender.sol`** | Payment Proxy | Shared security proxy for ATTR token payments. Allows collectors to approve once while authorized creator collections pull payments safely. | **ATTRDeployer Factory** (`Ownable`). |
+| **`NFTCollection.sol`** | Creator NFTs | Creator collection supporting EIP-712 voucher-based mints, primary mints, and tips in ETH or $ATTR. | **Creator / Admin** (`Ownable`). |
+| **`PaymentSplitter.sol`** | Revenue Split | Pull-payment splitter distributing primary sales and secondary royalties across creator payees. | **Creator / Deployer** (`Ownable`). |
+| **`VestingLockCampaignFactory.sol`** | Staking Factory | Owner-controlled factory deploying isolated `VestingLockCampaign` instances for community lock-to-earn staking. | **DAO / Platform Admin** (`Ownable`). |
+| **`VestingLockCampaign.sol`** | Staking Pools | Community lock-to-earn staking pools where users lock ATTR for configurable periods to earn reward allocations. | **Factory / Creator**. |
 
-## Contract Overview
+---
 
-| Contract                     | Description                                                                                                                                                     |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ATTRToken`                  | ERC20 governance token with capped supply, permit, votes, and access control                                                                                    |
-| `NFTCollection`              | Factory-deployed creator NFT with EIP-712 voucher minting, `basePrice + creatorTip` routing, mutable `contractURI`, and optional ATTR payment via `ATTRSpender` |
-| `ATTRDeployer`               | Factory for `NFTCollection` + `PaymentSplitter` pairs; auto-authorises each collection in `ATTRSpender`                                                         |
-| `ATTRSpender`                | Shared ATTR-token payment proxy — users approve once, all authorised collections pull through this contract                                                     |
-| `MembershipToken`            | Tiered membership NFT (ERC721Votes + ERC2981) that absorbs the former `GovernanceNFT`; max 50 000 tokens                                                        |
-| `MembershipSaleSplitter`     | Immutable 70/30 ETH splitter — routes membership sale proceeds to treasury (70%) and LP capital (30%)                                                           |
-| `MembershipFeeDistributor`   | Synthetix-style index distributor — deposits ETH/ERC20 LP fee proceeds and lets membership NFT holders claim their pro-rata share                               |
-| `VestingLockCampaign`        | Reusable lock-to-earn vesting campaign; users lock ATTR for configurable terms and claim prefunded rewards                                                      |
-| `VestingLockCampaignFactory` | Owner-controlled factory for deploying isolated `VestingLockCampaign` instances with different campaign parameters                                              |
-| `PaymentSplitter`            | Pull-payment splitter for royalty and mint proceeds; supports dynamic payee/share updates                                                                       |
+## 4. Tokenomics & Treasury Architecture
 
-## Deployment Sequence
+The protocol uses a **Pre-Minted Treasury & Closed-Loop Recycling Model** (settled in `specs/attr-issuance-preminted-treasury.md` and `specs/membership-entitlement.md` §3B):
 
-Deploy contracts in this order for proper integration:
-
-| Step | Contract                     | Script                                       | Dependencies                                          | Notes                                           |
-| ---- | ---------------------------- | -------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------- |
-| 1    | `ATTRToken`                  | `scripts/deploy/token.ts`                    | None                                                  | ERC20 governance token                          |
-| 2    | `ATTRSpender`                | `scripts/deploy/attrSpender.ts`              | ATTR_TOKEN_ADDRESS                                    | Shared payment proxy for collections            |
-| 3    | `ATTRDeployer`               | `scripts/deploy/factory.ts`                  | ATTR_SPENDER_CONTRACT (optional)                      | Collection factory; auto-authorizes collections |
-| 4    | `MembershipSaleSplitter`     | `scripts/deploy/membershipSaleSplitter.ts`   | PLATFORM_TREASURY_ADDRESS, LIQUIDITY_RECEIVER_ADDRESS | 70/30 ETH splitter for membership sales         |
-| 5    | `MembershipToken`            | `scripts/deploy/membershipToken.ts`          | None                                                  | Tiered membership NFT                           |
-| 6    | `MembershipFeeDistributor`   | `scripts/deploy/membershipFeeDistributor.ts` | MEMBERSHIP_TOKEN_ADDRESS, DAO_MULTISIG_ADDRESS        | LP fee distributor for holders                  |
-| 7    | `VestingLockCampaignFactory` | `scripts/deploy/vestingFactory.ts`           | Owner/multisig address                                | Deploys reusable lock campaigns                 |
-
-### Post-Deployment Wiring
-
-After deploying, connect the contracts:
-
-1. **Transfer ATTRSpender ownership to factory** (if deployed):
-
-   ```bash
-   npx hardhat run scripts/transfer/attrSpenderOwnership.ts --network baseSepolia
-   ```
-
-2. **Set MembershipToken payment receiver** to splitter:
-
-3. **Set MembershipFeeDistributor snapshot** (DAO must execute):
-   ```solidity
-   // Once public mint ends, set the divisor for reward calculations
-   // totalSupply = current total supply from MembershipToken.totalSupply()
-   distributor.setTotalMintedSnapshot(membershipToken.totalSupply())
-   ```
-
-## Error Handling
-
-All contracts use a shared custom-error library. See [`contracts/docs/ERRORS.md`](contracts/docs/ERRORS.md) for the full reference with severity tiers and per-contract coverage.
-
-## Liquidity Flywheel
-
-```text
-Membership NFT Sale
-        ↓
-MembershipSaleSplitter
-  70% → Treasury operations
-  30% → ATTR/WETH LP capital
-              ↓
-        LP fee accrual
-  50% → Treasury
-  50% → MembershipFeeDistributor → NFT holders pro-rata
+```
+                       ┌─────────────────────────────────────────┐
+                       │           Deploy ATTR (1B Cap)          │
+                       └────────────────────┬────────────────────┘
+                                            │
+                    ┌───────────────────────┴───────────────────────┐
+                    ▼                                               ▼
+     ┌─────────────────────────────┐                 ┌─────────────────────────────┐
+     │   Day-1 Liquid: 300M (30%)  │                 │    Locked Buckets: 700M     │
+     └──────────────┬──────────────┘                 └──────────────┬──────────────┘
+                    │                                               │
+         ┌──────────┴──────────┐                                    ▼
+         ▼                     ▼                     ┌─────────────────────────────┐
+┌─────────────────┐   ┌─────────────────┐            │  3rd-Party Vesting Platform │
+│   Onboarding    │   │   Store Pack    │            │   (Sablier, Hedgey, etc.)   │
+│     Vault       │   │    Inventory    │            ├─────────────────────────────┤
+│   (150M ATTR)   │   │   (150M ATTR)   │            │ • Team (150M - 12m cliff)   │
+└────────┬────────┘   └────────┬────────┘            │ • Reserve (150M - Safe)     │
+         │                     │                     │ • Staking (120M - 36m lin)  │
+         ▼                     │                     │ • Marketing (100M - 6m cl)  │
+ Membership Grants             │ ◄─── Recycled ────┐ │ • Advisors (60M - 12m cl)   │
+ (drawn on mint)               ▼      (Spent ATTR) │ │ • LP Incentives (60M)       │
+                          Store Sales ─────────────┘ │ • DEX Seed (60M - Locked)   │
+                                                     └─────────────────────────────┘
 ```
 
-## Roadmap / Planned Changes
+1. **Deterministic 1B Supply Cap**:
+   * Exactly 1,000,000,000 ATTR created at genesis.
+   * `MINTER_ROLE` is permanently deleted. No contract or admin can ever inflate the token supply.
+2. **Day-1 Operational Float (30% / 300,000,000 ATTR)**:
+   * **150M Membership Onboarding Vault**: Dedicated exclusively to `MembershipToken` grants. With `MAX_SUPPLY = 50,000` and maximum grant of 2,500 ATTR, lifetime grant demand is mathematically capped at $50,000 \times 2,500 = 125,000,000\text{ ATTR}$, guaranteeing the vault cannot be exhausted under valid collection parameters.
+   * **150M Store Pack Inventory**: Sits in Store reserves. In-product ATTR spend recycles back into this pool, keeping the store evergreen without inflating supply. Board stakes on competitive leaderboards are burned via `ATTRToken.burn()`.
+3. **Locked Allocations (70% / 700,000,000 ATTR)**:
+   * Deposited directly into audited third-party streaming/vesting escrows (Sablier / Hedgey). No custom un-audited timelock contracts.
+4. **Platform Volume Share (Phase 2)**:
+   * All legacy "LP fee share" references are retired.
+   * When marketplace volume matures, `MembershipFeeDistributor` distributes real protocol volume (marketplace primary fees + secondary royalties) to members. Day 1 launch starts with `feeDistributor = address(0)`.
 
-### Tier-Based Voting Weight
+---
 
-**Status:** Architecture prepared, implementation pending
+## 5. Deployment Guide
 
-MembershipToken uses `ERC721Votes` which defaults to **1 vote per NFT**. Future upgrade will implement tier-weighted voting:
+### Single-Run Deployment & Setup (Recommended)
 
-- Tier 1 holders: 2x voting weight
-- Tier 2 holders: 1x voting weight
+We provide an automated script that deploys all contracts in exact dependency order, configures payment tokens, transfers required roles, and funds the grant vault in a single run:
 
-**Implementation approach:** Override `getVotes()` and `getPastVotes()` to multiply by tier multiplier. Consider adding `votesPerTier` mapping now (defaulting to 1) to enable future governance upgrades without redeployment.
+```bash
+# Local simulation
+npx hardhat run scripts/deploy/all.ts
 
-### Tier-Based Fee Distribution
+# Base Sepolia Testnet
+npm run deploy:all -- --network baseSepolia
 
-**Status:** Requires contract modification
+# Base Mainnet
+npm run deploy:all -- --network baseMainnet
+```
 
-Currently `MembershipFeeDistributor` distributes LP fees **equally per token** regardless of tier. Future upgrade will weight distributions by tier:
+#### What `scripts/deploy/all.ts` executes automatically:
+1. Deploys **`ATTRToken`** (1,000,000,000 ATTR minted to the distribution address).
+2. Deploys **`MembershipToken`** (configured with name, symbol, pricing, and 50k cap).
+3. Deploys **`ATTROnboardingVault`** (pre-binding `membershipToken.address` and DAO Timelock).
+4. Configures **`MembershipToken.configurePaymentTokens(vault, usdc)`** (verifies vault authorization).
+5. Funds **`ATTROnboardingVault`** with the 150,000,000 ATTR welcome-grant pool directly from deployer allocation, and forwards remaining unallocated tokens to `PLATFORM_TREASURY_ADDRESS`.
+6. Deploys **`ATTRSpender`**.
+7. Deploys **`ATTRDeployer`** (Collection Factory).
+8. Transfers **`ATTRSpender`** ownership to **`ATTRDeployer`** and verifies ownership on-chain.
+9. Deploys **`VestingLockCampaignFactory`** for community staking pools.
+10. Deploys **`MembershipFeeDistributor`** (Phase 2 component).
+11. Generates ready-to-copy `.env` environment variables and BaseScan verification commands.
 
-- Tier 1 holders: Bonus multiplier on claimable rewards
-- Requires: `tierMultipliers` mapping + modified `claimETH()`/`claimERC20()` logic
+---
 
-### Backend TypeScript Integration
+### Step-by-Step Manual Deployment (Reference)
 
-The package now exposes TypeChain-generated types for contract interaction:
+If deploying contracts individually:
+
+```bash
+# 1. Deploy ATTRToken (requires PLATFORM_TREASURY_ADDRESS on live networks)
+npx hardhat run scripts/deploy/token.ts --network baseSepolia
+
+# 2. Deploy MembershipToken
+npx hardhat run scripts/deploy/membershipToken.ts --network baseSepolia
+
+# 3. Deploy ATTRSpender
+npx hardhat run scripts/deploy/attrSpender.ts --network baseSepolia
+
+# 4. Deploy ATTRDeployer Factory
+npx hardhat run scripts/deploy/factory.ts --network baseSepolia
+
+# 5. Transfer ATTRSpender ownership to Factory
+npx hardhat run scripts/transfer/attrSpenderOwnership.ts --network baseSepolia
+
+# 6. Deploy Community Vesting Factory
+npx hardhat run scripts/deploy/vestingFactory.ts --network baseSepolia
+```
+
+---
+
+## 6. TypeScript SDK & Consumer Integration
+
+The `attr-web3` package exports typed contract ABIs, bytecode, and Viem struct definitions for use in backend microservices and frontend clients:
 
 ```typescript
 import {
-  ATTRToken,
-  ATTRToken__factory,
-  MembershipToken,
-  MembershipToken__factory,
-  MembershipFeeDistributor,
-  NFTVoucherStruct,
+  MembershipTokenABI,
+  ATTROnboardingVaultABI,
+  ATTRTokenABI,
+  NFTCollectionABI,
+  type NFTVoucher,
+  type PermitSignature
 } from "attr-web3";
+import { getContract } from "viem";
 
-// Factory classes include ABI + bytecode for deployment/attachment
-const token = ATTRToken__factory.connect(address, provider);
+// Example: Initialize typed contract instance with Viem
+const membership = getContract({
+  address: process.env.MEMBERSHIP_TOKEN_CONTRACT as `0x${string}`,
+  abi: MembershipTokenABI,
+  client: publicClient
+});
 
-// Struct types for contract calls
-const voucher: NFTVoucherStruct = {
-  tokenId: 1n,
-  minPrice: 1000000000000000000n, // 1 ETH
-  uri: "ipfs://...",
-  creator: "0x...",
-  royaltyBasisPoints: 500,
-  signature: "0x...",
+// Read public tier price
+const tier1Price = await membership.read.tierPrices([1n]);
+
+// Prepare EIP-712 NFT Voucher struct
+const voucher: NFTVoucher = {
+  recipient: "0x...",
+  uri: "ipfs://QmCollectionNFT",
+  nonce: "unique-nonce-123",
+  currency: "0x0000000000000000000000000000000000000000",
+  basePrice: 100000000000000000n, // 0.1 ETH
+  creatorTip: 0n,
+  deadline: 1770000000n,
+  signature: "0x..."
 };
 ```
 
-**Backend usage:**
+---
 
-- Import contract types for type-safe viem/ethers interactions
-- Use factory classes for deterministic contract attachment
-- Access struct types for encoding complex parameters
+## 7. Security, Audits & Quality Gates
 
-### Backend Rewiring Guide
-
-**Before (string-based, no type safety):**
-
-```typescript
-import { ethers } from "hardhat";
-
-// String lookup - no compile-time validation
-const MembershipToken = await ethers.getContractFactory("MembershipToken");
-const membership = MembershipToken.attach(address);
-
-// Method calls are untyped - typos only fail at runtime
-await membership.adminMintMembership(recipient, tier, uri); // could typo method name
-```
-
-**After (type-safe with exposed interfaces):**
-
-```typescript
-import { MembershipToken, MembershipToken__factory } from "attr-web3";
-
-// Factory class provides typed contract instance
-const membership: MembershipToken = MembershipToken__factory.connect(
-  address,
-  signer,
-);
-
-// Full autocomplete + compile-time checking
-await membership.adminMintMembership(
-  recipient, // string - TypeScript validates
-  tier, // number
-  metadataURI, // string
-);
-
-// Access on-chain data with typed returns
-const tier: bigint = await membership.tokenTiers(tokenId);
-const price: bigint = await membership.tierPrices(tier);
-```
-
-**Key Benefits:**
-
-- Compile-time validation of contract method names
-- Type checking on all parameters (no more passing strings where numbers expected)
-- Auto-completion for contract state variables and methods
-- Struct types for complex parameters (e.g., `NFTVoucherStruct`)
+* **Zero Minting Keys**: Supply cap is enforced mathematically. Post-genesis minting is impossible.
+* **Checks-Effects-Interactions (CEI)**: Grant disbursement occurs prior to external ERC-721 receiver callbacks, with all mint entrypoints protected by OpenZeppelin `ReentrancyGuard`.
+* **Deep Invariant Fuzzing**: The protocol fee sharing and token accounting passed 10,000-run / 2.56-million-call invariant fuzz testing without a single revert or break of conservation (`claimed + dust <= deposited`).
+* **Independent Pre-Audit Reviews**: Full multi-agent QA (`PASS`) and Security Auditor (`SHIP`) sign-offs documented in `specs/test-briefs/`.
+* **Custom Errors**: All contracts use custom errors from `contracts/Errors.sol`. Detailed error coverage and severity levels are cataloged in [`contracts/docs/ERRORS.md`](contracts/docs/ERRORS.md).
