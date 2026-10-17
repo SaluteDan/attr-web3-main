@@ -163,6 +163,8 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
         if (address(onboardingVault) != address(0)) revert PaymentTokensAlreadyConfigured();
         if (onboardingVault_.code.length == 0 || usdc_.code.length == 0 || onboardingVault_ == usdc_) revert InvalidPaymentToken();
         if (block.chainid == 8453 && usdc_ != BASE_USDC) revert InvalidPaymentToken();
+        // The vault must have authorized this contract as its grant disburser.
+        if (IATTROnboardingVault(onboardingVault_).membershipToken() != address(this)) revert InvalidPaymentToken();
         onboardingVault = IATTROnboardingVault(onboardingVault_);
         usdc = IERC20(usdc_);
         emit PaymentTokensConfigured(onboardingVault_, usdc_);

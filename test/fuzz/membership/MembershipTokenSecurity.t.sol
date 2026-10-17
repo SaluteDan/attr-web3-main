@@ -48,6 +48,8 @@ contract HookGrant {
     MembershipToken internal target;
     bytes public lastError;
     function arm(MembershipToken target_) external { target = target_; }
+    /// @notice Mirrors the vault getter so the membership's authorization check passes.
+    function membershipToken() external view returns (address) { return address(target); }
     function disburseGrant(address, uint256) external {
         (bool ok, bytes memory reason) = address(target).call(abi.encodeCall(target.mintMembership, (1, "attack")));
         require(!ok, "reentry succeeded"); lastError = reason;
@@ -88,7 +90,7 @@ contract MembershipTokenSecurityTest is QAMembershipTokenTest {
     function test_GrantCallbackReentry() public {
         HookGrant hook = new HookGrant();
         MembershipToken fresh = new MembershipToken("ATTR-MEMBER-ID", "ATTR#", address(this), treasury, treasury, 500, "", 50000, 2);
-        fresh.configurePaymentTokens(address(hook), address(usdc)); hook.arm(fresh);
+        hook.arm(fresh); fresh.configurePaymentTokens(address(hook), address(usdc));
         vm.prank(buyer); fresh.mintMembership{value: ETH_PRICE}(1, "x");
         assertEq(bytes4(hook.lastError()), GUARD);
     }

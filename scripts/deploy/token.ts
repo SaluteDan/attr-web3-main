@@ -21,8 +21,19 @@ async function main() {
 
   // Deploy-time distribution address receives the full 1B allocation, then funds the
   // onboarding vault, store inventory pool, and third-party vesting streams.
-  const DISTRIBUTION_ADDRESS = (process.env.PLATFORM_TREASURY_ADDRESS ||
-    deployer.account.address) as `0x${string}`;
+  // On live networks this MUST be supplied explicitly: defaulting to the deployer would
+  // silently hand the entire 1B supply to an operator EOA.
+  const envAddr = process.env.PLATFORM_TREASURY_ADDRESS;
+  const isLocal =
+    connection.networkName === "default" ||
+    connection.networkName === "hardhat" ||
+    connection.networkName === "localhost";
+  if (!envAddr && !isLocal) {
+    throw new Error(
+      "PLATFORM_TREASURY_ADDRESS is required: it receives the entire 1B ATTR supply",
+    );
+  }
+  const DISTRIBUTION_ADDRESS = (envAddr || deployer.account.address) as `0x${string}`;
 
   const CAP = parseEther("1000000000"); // 1 Billion fixed max supply
 

@@ -30,6 +30,7 @@ contract ATTRTokenFuzzTest is Test {
         token = new ATTRToken(treasury);
 
         // Stateful invariant fuzzing targets only the handlers below.
+        targetContract(address(this));
         bytes4[] memory selectors = new bytes4[](2);
         selectors[0] = this.handler_transfer.selector;
         selectors[1] = this.handler_burn.selector;
@@ -200,10 +201,11 @@ contract ATTRTokenFuzzTest is Test {
     /**
      * @notice Handler: Transfer tokens.
      */
-    function handler_transfer(address from, address to, uint256 amount) public {
-        vm.assume(from != address(0));
-        vm.assume(to != address(0));
-        vm.assume(from != to);
+    function handler_transfer(uint8 fromSeed, uint8 toSeed, uint256 amount) public {
+        address[4] memory holders = [treasury, alice, bob, owner];
+        address from = holders[fromSeed % 4];
+        address to = holders[toSeed % 4];
+        if (from == to) return;
 
         amount = bound(amount, 0, token.balanceOf(from));
 
