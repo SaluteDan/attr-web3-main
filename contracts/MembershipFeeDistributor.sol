@@ -248,6 +248,7 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
 
     /// @notice Set the authorized push keeper (`address(0)` disables pushes).
     function setKeeper(address keeper_) external onlyOwner {
+        if (keeper_ == address(0)) revert ZeroAddress();
         address old = keeper;
         keeper = keeper_;
         emit KeeperUpdated(old, keeper_);

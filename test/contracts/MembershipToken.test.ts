@@ -860,6 +860,15 @@ describe("MembershipToken", function () {
       );
     });
 
+    it("Should not allow setting the fee distributor to zero", async function () {
+      // A zero distributor would silently disable transfer checkpoints.
+      await viem.assertions.revertWithCustomError(
+        membership.write.setFeeDistributor([zeroAddress]),
+        membership,
+        "ZeroAddress",
+      );
+    });
+
     it("Should not allow non-owner to set payment receiver", async function () {
       await viem.assertions.revertWithCustomError(
         membership.write.setPaymentReceiver([user2.account.address], {
