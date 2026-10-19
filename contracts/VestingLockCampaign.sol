@@ -234,8 +234,11 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
 
         uint256 balanceBefore = REWARD_TOKEN.balanceOf(address(this));
         REWARD_TOKEN.safeTransferFrom(msg.sender, address(this), amount);
-        uint256 received = REWARD_TOKEN.balanceOf(address(this)) - balanceBefore;
-        if (received == 0) revert ZeroDeposit();
+        uint256 balanceAfter = REWARD_TOKEN.balanceOf(address(this));
+        // Guard the delta explicitly: a rebasing or sender-fee token can leave
+        // the received amount at zero (or below the pre-transfer balance).
+        if (balanceAfter <= balanceBefore) revert ZeroDeposit();
+        uint256 received = balanceAfter - balanceBefore;
 
         totalRewardsFunded += received;
 
