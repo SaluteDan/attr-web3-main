@@ -89,6 +89,7 @@ Declared in `Errors.sol` (bottom block) and used by `VestingLockCampaign` / `Ves
 | `LockPeriodNotMet()` ⚠️ | — | `VestingLockCampaign` | Wallet lock has not reached the required duration |
 | `ParticipantCapReached()` ⚠️ | — | `VestingLockCampaign` | Campaign has reached its participant cap |
 | `RewardNotClaimable()` ✅ | — | `VestingLockCampaign` | Wallet is not eligible to claim the campaign reward |
+| `RewardsNotFunded(uint256 available, uint256 required)` ✅ | — | `VestingLockCampaign` | Campaign holds less unencumbered reward balance than one `REWARD_AMOUNT`; rewards were not funded |
 | `RewardAlreadyFinalized()` ⚠️ | — | `VestingLockCampaign` | Wallet has already claimed or forfeited the campaign reward |
 | `WithdrawUnavailable()` ⚠️ | — | `VestingLockCampaign` | Locked tokens cannot be withdrawn yet |
 
@@ -98,7 +99,7 @@ Declared in `Errors.sol` (bottom block) and used by `VestingLockCampaign` / `Ves
 
 Custom errors annotated **✅ asserted** below are covered by at least one `revertWithCustomError` assertion in the Hardhat test suite (`test/contracts/`); errors annotated **⚠️ not asserted** are declared and used in code but have **no dedicated `revertWithCustomError` test yet** (they are reachable in code but unverified by the suite). Foundry fuzz tests (`test/fuzz/`) cover invariants where applicable, not individual error selectors.
 
-**VestingLockCampaign coverage (verified 2026-10-06 against `test/contracts/VestingLockCampaign.test.ts`):** 4 of the 10 campaign errors have a `revertWithCustomError` assertion; 6 do not. The 6 unasserted errors are listed with ⚠️ below.
+**VestingLockCampaign coverage (verified 2026-10-19 against `test/contracts/VestingLockCampaign.test.ts`):** 5 of the 11 campaign errors have a `revertWithCustomError` assertion; 6 do not. The 6 unasserted errors are listed with ⚠️ above.
 
 To run all tests:
 

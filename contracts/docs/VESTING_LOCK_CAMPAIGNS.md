@@ -82,7 +82,9 @@ After deployment, fund the campaign with enough reward tokens:
 requiredRewardPool = expectedParticipants * rewardAmount
 ```
 
-If ATTR is both the staking token and reward token, the contract reserves user principal during reward sweeps so locked ATTR cannot be swept by the owner.
+If ATTR is both the staking token and reward token, the contract reserves user principal during reward sweeps so locked ATTR cannot be swept by the owner. The same reservation is enforced on the claim path: `claimReward()` and `claimRewardAndWithdraw()` revert with `RewardsNotFunded(available, required)` when the campaign does not hold at least one `rewardAmount` beyond reserved principal. An underfunded campaign therefore cannot pay early claimers out of other users' locked ATTR.
+
+`availableRewards()` reports the unencumbered reward balance, and `totalRewardsFunded()` accumulates funds received through `fundRewards()` measured as a balance delta (fee-on-transfer safe).
 
 ## Frontend Configuration
 
@@ -115,9 +117,10 @@ This keeps custody and approval scope explicit. If we later want a single protoc
 ## Safety Notes
 
 - Campaign parameters are immutable. Deploy a new campaign for new terms.
-- Fund rewards before opening the campaign.
+- Fund rewards before opening the campaign. Claims revert with `RewardsNotFunded` until enough reward tokens are available, so an unfunded campaign blocks rewards rather than spending locked principal.
 - Use a multisig as factory/campaign owner.
 - Prefer `allowEarlyWithdraw = false` for strict “held for 30 days” vesting.
 - If `allowEarlyWithdraw = true`, early withdrawal returns principal but permanently forfeits the reward.
 - `claimReward()` and `withdrawLocked()` remain available as separate recovery/fallback actions, but the preferred user path is `claimRewardAndWithdraw()`.
 - `sweepUnallocatedRewards` is only available after `campaignEnd + lockPeriod`.
+- Balance-delta funding means fee-on-transfer reward tokens credit only what actually arrived.

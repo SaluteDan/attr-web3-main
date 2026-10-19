@@ -268,6 +268,113 @@ describe("VestingLockCampaign", function () {
       );
     });
 
+    it("rejects claims when rewards are unfunded instead of paying out locked principal", async function () {
+      const { campaign, token, treasury, user, user2 } =
+        await deployCampaignFixture();
+
+      for (const account of [user, user2]) {
+        await token.write.transfer([account.account.address, USER_LOCK], {
+          account: treasury.account,
+        });
+        await token.write.approve([campaign.address, USER_LOCK], {
+          account: account.account,
+        });
+        await campaign.write.lock([USER_LOCK], { account: account.account });
+      }
+
+      expect(await campaign.read.availableRewards()).to.equal(0n);
+      expect(await campaign.read.totalRewardsFunded()).to.equal(0n);
+      expect(await campaign.read.totalLocked()).to.equal(USER_LOCK * 2n);
+
+      await networkHelpers.time.increase(BigInt(LOCK_PERIOD));
+
+      await viem.assertions.revertWithCustomError(
+        campaign.write.claimReward({ account: user.account }),
+        campaign,
+        "RewardsNotFunded",
+      );
+      await viem.assertions.revertWithCustomError(
+        campaign.write.claimRewardAndWithdraw({ account: user2.account }),
+        campaign,
+        "RewardsNotFunded",
+      );
+
+      // Both principals are still held; no early claimer drained another user's lock.
+      expect(await token.read.balanceOf([campaign.address])).to.equal(
+        USER_LOCK * 2n,
+      );
+      expect(await campaign.read.totalWithdrawn()).to.equal(0n);
+
+      await viem.assertions.emitWithArgs(
+        campaign.write.withdrawLocked({ account: user.account }),
+        campaign,
+        "LockedTokensWithdrawn",
+        [getAddress(user.account.address), USER_LOCK, false],
+      );
+      await viem.assertions.emitWithArgs(
+        campaign.write.withdrawLocked({ account: user2.account }),
+        campaign,
+        "LockedTokensWithdrawn",
+        [getAddress(user2.account.address), USER_LOCK, false],
+      );
+
+      expect(await token.read.balanceOf([campaign.address])).to.equal(0n);
+
+      // Now fund exactly one reward: only that claim succeeds, principal stays reserved.
+      const { campaign: funded, token: fundedToken, treasury: fundedTreasury, user: fundedUser, user2: fundedUser2 } =
+        await deployCampaignFixture();
+
+      for (const account of [fundedUser, fundedUser2]) {
+        await fundedToken.write.transfer(
+          [account.account.address, USER_LOCK],
+          { account: fundedTreasury.account },
+        );
+        await fundedToken.write.approve([funded.address, USER_LOCK], {
+          account: account.account,
+        });
+        await funded.write.lock([USER_LOCK], { account: account.account });
+      }
+
+      await fundedToken.write.approve([funded.address, REWARD], {
+        account: fundedTreasury.account,
+      });
+      await funded.write.fundRewards([REWARD], {
+        account: fundedTreasury.account,
+      });
+
+      await networkHelpers.time.increase(BigInt(LOCK_PERIOD));
+
+      await funded.write.claimReward({ account: fundedUser.account });
+      expect(await fundedToken.read.balanceOf([fundedUser.account.address])).to.equal(
+        REWARD,
+      );
+
+      await viem.assertions.revertWithCustomError(
+        funded.write.claimReward({ account: fundedUser2.account }),
+        funded,
+        "RewardsNotFunded",
+      );
+
+      // Only the reward left the contract; both principals remain.
+      expect(await fundedToken.read.balanceOf([funded.address])).to.equal(
+        USER_LOCK * 2n,
+      );
+    });
+
+    it("credits rewards by the amount actually received", async function () {
+      const { campaign, token, treasury } = await deployCampaignFixture();
+
+      await token.write.approve([campaign.address, REWARD], {
+        account: treasury.account,
+      });
+      await campaign.write.fundRewards([REWARD], {
+        account: treasury.account,
+      });
+
+      expect(await campaign.read.totalRewardsFunded()).to.equal(REWARD);
+      expect(await campaign.read.availableRewards()).to.equal(REWARD);
+    });
+
     it("does not sweep locked principal when ATTR is both stake and reward token", async function () {
       const { campaign, token, treasury, user, recipient } =
         await fundAndApproveUser();

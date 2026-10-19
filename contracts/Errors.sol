@@ -133,6 +133,9 @@ error ParticipantCapReached();
 /// @dev Wallet is not eligible to claim the campaign reward. [VestingLockCampaign]
 error RewardNotClaimable();
 
+/// @dev Campaign holds less than the reward plus reserved principal; rewards were never funded. [VestingLockCampaign]
+error RewardsNotFunded(uint256 available, uint256 required);
+
 /// @dev Wallet has already claimed or forfeited the campaign reward. [VestingLockCampaign]
 error RewardAlreadyFinalized();
 
