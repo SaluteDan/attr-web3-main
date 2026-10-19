@@ -20,13 +20,13 @@ describe("VestingLockCampaign", function () {
   >;
 
   async function deployTokenFixture() {
-    const [owner, treasury, user, user2, recipient] =
+    const [owner, treasury, user, user2, user3, recipient] =
       await viem.getWalletClients();
 
     // ATTRToken mints its entire fixed 1B cap to the distribution address at deploy.
     const token = await viem.deployContract("ATTRToken", [treasury.account.address]);
 
-    return { owner, treasury, user, user2, recipient, token };
+    return { owner, treasury, user, user2, user3, recipient, token };
   }
 
   async function campaignConfig(
@@ -266,6 +266,164 @@ describe("VestingLockCampaign", function () {
         earlyFixture.campaign,
         "RewardNotClaimable",
       );
+    });
+
+    it("rejects claims when rewards are unfunded instead of paying out locked principal", async function () {
+      const { campaign, token, treasury, user, user2, user3 } =
+        await deployCampaignFixture();
+
+      // Three lockers: 9,000 principal held, 0 rewards funded. Two lockers would
+      // not be enough to make the pre-patch combined claim succeed (5,000 reward
+      // + 3,000 principal > 6,000 balance), so three are required to exercise
+      // the combined-path drain rather than a plain insufficient-balance revert.
+      for (const account of [user, user2, user3]) {
+        await token.write.transfer([account.account.address, USER_LOCK], {
+          account: treasury.account,
+        });
+        await token.write.approve([campaign.address, USER_LOCK], {
+          account: account.account,
+        });
+        await campaign.write.lock([USER_LOCK], { account: account.account });
+      }
+
+      expect(await campaign.read.availableRewards()).to.equal(0n);
+      expect(await campaign.read.totalRewardsFunded()).to.equal(0n);
+      expect(await campaign.read.totalLocked()).to.equal(USER_LOCK * 3n);
+
+      await networkHelpers.time.increase(BigInt(LOCK_PERIOD));
+
+      await viem.assertions.revertWithCustomError(
+        campaign.write.claimReward({ account: user.account }),
+        campaign,
+        "RewardsNotFunded",
+      );
+      await viem.assertions.revertWithCustomError(
+        campaign.write.claimRewardAndWithdraw({ account: user2.account }),
+        campaign,
+        "RewardsNotFunded",
+      );
+
+      // All principal is still held; no early claimer drained another user's lock.
+      expect(await token.read.balanceOf([campaign.address])).to.equal(
+        USER_LOCK * 3n,
+      );
+      expect(await campaign.read.totalWithdrawn()).to.equal(0n);
+      expect(await campaign.read.rewardsClaimedCount()).to.equal(0n);
+
+      for (const account of [user, user2, user3]) {
+        await viem.assertions.emitWithArgs(
+          campaign.write.withdrawLocked({ account: account.account }),
+          campaign,
+          "LockedTokensWithdrawn",
+          [getAddress(account.account.address), USER_LOCK, false],
+        );
+      }
+
+      expect(await token.read.balanceOf([campaign.address])).to.equal(0n);
+
+      // Now fund exactly one reward: only that claim succeeds, principal stays reserved.
+      const { campaign: funded, token: fundedToken, treasury: fundedTreasury, user: fundedUser, user2: fundedUser2 } =
+        await deployCampaignFixture();
+
+      for (const account of [fundedUser, fundedUser2]) {
+        await fundedToken.write.transfer(
+          [account.account.address, USER_LOCK],
+          { account: fundedTreasury.account },
+        );
+        await fundedToken.write.approve([funded.address, USER_LOCK], {
+          account: account.account,
+        });
+        await funded.write.lock([USER_LOCK], { account: account.account });
+      }
+
+      await fundedToken.write.approve([funded.address, REWARD], {
+        account: fundedTreasury.account,
+      });
+      await funded.write.fundRewards([REWARD], {
+        account: fundedTreasury.account,
+      });
+
+      await networkHelpers.time.increase(BigInt(LOCK_PERIOD));
+
+      await funded.write.claimReward({ account: fundedUser.account });
+      expect(await fundedToken.read.balanceOf([fundedUser.account.address])).to.equal(
+        REWARD,
+      );
+
+      await viem.assertions.revertWithCustomError(
+        funded.write.claimReward({ account: fundedUser2.account }),
+        funded,
+        "RewardsNotFunded",
+      );
+
+      // Only the reward left the contract; both principals remain.
+      expect(await fundedToken.read.balanceOf([funded.address])).to.equal(
+        USER_LOCK * 2n,
+      );
+    });
+
+    it("credits rewards by the amount actually received, not the nominal amount", async function () {
+      const { owner, treasury, user, token, campaign } =
+        await deployCampaignFixture();
+
+      // 10% fee-on-transfer reward token: nominal 6,000 arrives as 5,400.
+      const feeToken = await viem.deployContract("MockFeeOnTransferERC20", [
+        1000n,
+      ]);
+      const feeCampaign = await viem.deployContract("VestingLockCampaign", [
+        owner.account.address,
+        await campaignConfig(token.address, { rewardToken: feeToken.address }),
+      ]);
+
+      const nominalFunding = (REWARD * 6n) / 5n;
+      const receivedFunding = (REWARD * 54n) / 50n;
+
+      await feeToken.write.mint([treasury.account.address, nominalFunding]);
+      await feeToken.write.approve([feeCampaign.address, nominalFunding], {
+        account: treasury.account,
+      });
+      await feeCampaign.write.fundRewards([nominalFunding], {
+        account: treasury.account,
+      });
+
+      // An implementation crediting `amount` would report 6,000 here.
+      expect(await feeCampaign.read.totalRewardsFunded()).to.equal(
+        receivedFunding,
+      );
+      expect(await feeCampaign.read.availableRewards()).to.equal(
+        receivedFunding,
+      );
+
+      await token.write.transfer([user.account.address, USER_LOCK], {
+        account: treasury.account,
+      });
+      await token.write.approve([feeCampaign.address, USER_LOCK], {
+        account: user.account,
+      });
+      await feeCampaign.write.lock([USER_LOCK], { account: user.account });
+
+      await networkHelpers.time.increase(BigInt(LOCK_PERIOD));
+
+      await feeCampaign.write.claimReward({ account: user.account });
+
+      // The claim is booked gross (5,000), so the user nets 4,500 after the
+      // outbound fee while the contract retains a consistent 400.
+      expect(await feeToken.read.balanceOf([user.account.address])).to.equal(
+        (REWARD * 9n) / 10n,
+      );
+      expect(await feeCampaign.read.totalRewardsClaimed()).to.equal(REWARD);
+      expect(await feeCampaign.read.availableRewards()).to.equal(
+        receivedFunding - REWARD,
+      );
+      expect(await feeCampaign.read.totalRewardsFunded()).to.equal(
+        receivedFunding,
+      );
+
+      // Staked principal is untouched by reward accounting.
+      expect(await token.read.balanceOf([feeCampaign.address])).to.equal(
+        USER_LOCK,
+      );
+      expect(await campaign.read.totalRewardsFunded()).to.equal(0n);
     });
 
     it("does not sweep locked principal when ATTR is both stake and reward token", async function () {

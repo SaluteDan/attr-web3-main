@@ -65,6 +65,8 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
     uint256 public totalWithdrawn;
     /// @notice Total reward tokens claimed by users.
     uint256 public totalRewardsClaimed;
+    /// @notice Total reward tokens funded into the campaign, measured after transfer.
+    uint256 public totalRewardsFunded;
     /// @notice Number of wallets that have claimed rewards.
     uint256 public rewardsClaimedCount;
     /// @notice Number of wallets that forfeited rewards by withdrawing early.
@@ -156,6 +158,7 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
      */
     function claimReward() external nonReentrant {
         if (!isRewardClaimable(msg.sender)) revert RewardNotClaimable();
+        _requireRewardFunded();
 
         Position storage position = positions[msg.sender];
         position.rewardClaimed = true;
@@ -176,6 +179,7 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
 
         Position storage position = positions[msg.sender];
         if (position.withdrawn) revert WithdrawUnavailable();
+        _requireRewardFunded();
 
         uint256 lockedAmount = position.amount;
         position.rewardClaimed = true;
@@ -228,9 +232,17 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
     function fundRewards(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroDeposit();
 
+        uint256 balanceBefore = REWARD_TOKEN.balanceOf(address(this));
         REWARD_TOKEN.safeTransferFrom(msg.sender, address(this), amount);
+        uint256 balanceAfter = REWARD_TOKEN.balanceOf(address(this));
+        // Guard the delta explicitly: a rebasing or sender-fee token can leave
+        // the received amount at zero (or below the pre-transfer balance).
+        if (balanceAfter <= balanceBefore) revert ZeroDeposit();
+        uint256 received = balanceAfter - balanceBefore;
 
-        emit RewardFunded(msg.sender, amount);
+        totalRewardsFunded += received;
+
+        emit RewardFunded(msg.sender, received);
     }
 
     /**
@@ -245,9 +257,7 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
         uint256 reservedRewards = (
             participantCount - rewardsClaimedCount - rewardsForfeitedCount
         ) * REWARD_AMOUNT;
-        uint256 reservedPrincipal = address(STAKING_TOKEN) == address(REWARD_TOKEN)
-            ? totalLocked - totalWithdrawn
-            : 0;
+        uint256 reservedPrincipal = _reservedPrincipal();
         uint256 reservedBalance = reservedPrincipal + reservedRewards;
         uint256 balance = REWARD_TOKEN.balanceOf(address(this));
         if (balance <= reservedBalance) revert NothingToClaim();
@@ -273,5 +283,25 @@ contract VestingLockCampaign is Ownable, ReentrancyGuard {
         if (!position.exists || position.rewardClaimed || position.forfeited) return false;
 
         return block.timestamp >= position.lockedAt + LOCK_PERIOD;
+    }
+
+    /// @notice Reward tokens the campaign can pay without consuming locked principal.
+    /// @return The unencumbered reward balance of this campaign.
+    function availableRewards() public view returns (uint256) {
+        uint256 balance = REWARD_TOKEN.balanceOf(address(this));
+        uint256 reserved = _reservedPrincipal();
+        return balance > reserved ? balance - reserved : 0;
+    }
+
+    /// @dev Staking principal the contract must be able to return to users.
+    ///      Non-zero only when rewards are denominated in the staked token.
+    function _reservedPrincipal() internal view returns (uint256) {
+        return address(STAKING_TOKEN) == address(REWARD_TOKEN) ? totalLocked - totalWithdrawn : 0;
+    }
+
+    /// @dev Reject reward payouts that would consume principal reserved for locked positions.
+    function _requireRewardFunded() internal view {
+        uint256 available = availableRewards();
+        if (available < REWARD_AMOUNT) revert RewardsNotFunded(available, REWARD_AMOUNT);
     }
 }
