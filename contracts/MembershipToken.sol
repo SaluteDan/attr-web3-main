@@ -151,7 +151,8 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
      * @param distributor Fee distributor address (0 disables notifications).
      */
     function setFeeDistributor(address distributor) external onlyOwner {
-        if (distributor == address(0)) revert ZeroAddress();
+        // `address(0)` is intentional: it unbinds the distributor and disables
+        // transfer checkpoints.
         address old = feeDistributor;
         feeDistributor = distributor;
         emit FeeDistributorSet(old, distributor);

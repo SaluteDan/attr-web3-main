@@ -90,21 +90,16 @@ describe("MembershipFeeDistributor (tier-weighted)", function () {
   // ── Gateway / snapshot semantics ───────────────────────────────────────────
 
   describe("setKeeper", function () {
-    it("rejects a zero keeper", async function () {
-      // A zero keeper would silently disable keeper-gated pushes.
-      await viem.assertions.revertWithCustomError(
-        dist.write.setKeeper([zeroAddress]),
-        dist,
-        "ZeroAddress",
-      );
-    });
-
-    it("allows the owner to set a real keeper", async function () {
+    it("allows the owner to set and clear the keeper", async function () {
       const [, , keeper] = await viem.getWalletClients();
       await dist.write.setKeeper([keeper.account.address]);
       expect(await dist.read.keeper()).to.equal(
         getAddress(keeper.account.address),
       );
+
+      // address(0) is an intentional kill switch for keeper-gated pushes.
+      await dist.write.setKeeper([zeroAddress]);
+      expect(await dist.read.keeper()).to.equal(zeroAddress);
     });
   });
 
