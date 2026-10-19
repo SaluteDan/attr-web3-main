@@ -124,3 +124,31 @@ This keeps custody and approval scope explicit. If we later want a single protoc
 - `claimReward()` and `withdrawLocked()` remain available as separate recovery/fallback actions, but the preferred user path is `claimRewardAndWithdraw()`.
 - `sweepUnallocatedRewards` is only available after `campaignEnd + lockPeriod`.
 - Balance-delta funding means fee-on-transfer reward tokens credit only what actually arrived.
+
+## Supported Tokens
+
+Campaigns support **standard ERC-20 tokens only** — tokens whose `transfer` and
+`transferFrom` move exactly the requested amount, with no fee taken on either
+side, and whose balance cannot change outside a transfer (no rebasing).
+
+This is a hard requirement, not a preference. The contract accounts for rewards
+and staking principal in nominal units, and reserves locked principal by
+subtracting aggregate totals. Standard ERC-20 semantics are what make that
+arithmetic equal to real balances. ATTR and the campaign's normal deployment
+tokens meet this requirement.
+
+Explicitly **not supported**:
+
+| Token behaviour | Consequence |
+| --- | --- |
+| Fee taken from the recipient on transfer (fee-on-transfer) | A claim finalises for the gross `rewardAmount` while the user receives less; the difference is not recoverable |
+| Fee debited from the sender on top of `amount` | Payouts can reduce the balance below reserved principal, leaving the contract under-collateralised |
+| Rebasing supply (positive or negative) | Balances change without a transfer, so recorded liabilities no longer match backing |
+
+`fundRewards()` is fee-on-transfer tolerant on the **inbound** side (it credits
+the received balance delta), but that does not make such a token safe for the
+campaign as a whole — outbound payouts are still booked gross.
+
+Deploying a campaign with a non-standard token is an operational decision that
+this contract cannot enforce. Callers should validate the token before creating
+a campaign through the factory.
