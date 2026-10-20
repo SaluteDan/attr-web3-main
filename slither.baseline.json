@@ -1,6 +1,6 @@
 {
   "_comment": "Slither baseline — regenerate with: node scripts/util/slither-baseline.js --write",
-  "generatedAt": "2026-10-19",
+  "generatedAt": "2026-10-20",
   "fingerprints": [
     "arbitrary-send-eth | High | MembershipFeeDistributor | _push | contracts/MembershipFeeDistributor.sol | MembershipFeeDistributor._push(address,address) (contractsFILE#) sends eth to arbitrary user Dangerous calls: - (ok,None) = holder.call{value: amt}() (contractsFILE#)",
     "calls-loop | Low | MembershipFeeDistributor | _weightOf | contracts/MembershipFeeDistributor.sol | MembershipFeeDistributor._weightOf(uint256) (contractsFILE#) has external calls inside a loop: tier = IMembershipTiers(address(membershipToken)).getTier(tokenId) (contractsFILE#) Calls stack containing the loop: MembershipFeeDistributor.depositERC20(IERC20,uint256) MembershipFeeDistributor._liveWeight()",
@@ -18,7 +18,6 @@
     "cyclomatic-complexity | Informational | ATTRDeployer | createCollectionWithSeparateReceivers | contracts/ATTRDeployer.sol | ATTRDeployer.createCollectionWithSeparateReceivers(string,string,uint96,address[],uint256[],address[],uint256[],string,uint256,uint256,address) (contractsFILE#) has a high cyclomatic complexity (21).",
     "cyclomatic-complexity | Informational | NFTCollection | redeem | contracts/NFTCollection.sol | NFTCollection.redeem(NFTCollection.NFTVoucher,NFTCollection.PermitSignature) (contractsFILE#) has a high cyclomatic complexity (19).",
     "cyclomatic-complexity | Informational | NFTCollection | redeemWithApproval | contracts/NFTCollection.sol | NFTCollection.redeemWithApproval(NFTCollection.NFTVoucher) (contractsFILE#) has a high cyclomatic complexity (16).",
-    "dead-code | Informational | MembershipFeeDistributor | _clampedWeight | contracts/MembershipFeeDistributor.sol | MembershipFeeDistributor._clampedWeight(address,uint256) (contractsFILE#) is never used and should be removed",
     "dead-code | Informational | MembershipToken | _increaseBalance | contracts/MembershipToken.sol | MembershipToken._increaseBalance(address,uint128) (contractsFILE#) is never used and should be removed",
     "immutable-states | Optimization | ATTRDeployer | attrSpender | contracts/ATTRDeployer.sol | ATTRDeployer.attrSpender (contractsFILE#) should be immutable",
     "immutable-states | Optimization | NFTCollection | attrSpender | contracts/NFTCollection.sol | NFTCollection.attrSpender (contractsFILE#) should be immutable",
@@ -72,7 +71,6 @@
     "cyclomatic-complexity | Informational | ATTRDeployer | createCollectionWithSeparateReceivers | contracts/ATTRDeployer.sol | ATTRDeployer.createCollectionWithSeparateReceivers(string,string,uint96,address[],uint256[],address[],uint256[],string,uint256,uint256,address) (contractsFILE#) has a high cyclomatic complexity (21).": 1,
     "cyclomatic-complexity | Informational | NFTCollection | redeem | contracts/NFTCollection.sol | NFTCollection.redeem(NFTCollection.NFTVoucher,NFTCollection.PermitSignature) (contractsFILE#) has a high cyclomatic complexity (19).": 1,
     "cyclomatic-complexity | Informational | NFTCollection | redeemWithApproval | contracts/NFTCollection.sol | NFTCollection.redeemWithApproval(NFTCollection.NFTVoucher) (contractsFILE#) has a high cyclomatic complexity (16).": 1,
-    "dead-code | Informational | MembershipFeeDistributor | _clampedWeight | contracts/MembershipFeeDistributor.sol | MembershipFeeDistributor._clampedWeight(address,uint256) (contractsFILE#) is never used and should be removed": 1,
     "dead-code | Informational | MembershipToken | _increaseBalance | contracts/MembershipToken.sol | MembershipToken._increaseBalance(address,uint128) (contractsFILE#) is never used and should be removed": 1,
     "immutable-states | Optimization | ATTRDeployer | attrSpender | contracts/ATTRDeployer.sol | ATTRDeployer.attrSpender (contractsFILE#) should be immutable": 1,
     "immutable-states | Optimization | NFTCollection | attrSpender | contracts/NFTCollection.sol | NFTCollection.attrSpender (contractsFILE#) should be immutable": 1,

@@ -5,21 +5,22 @@ on `main` since 2026-10-17 with `53 findings / 30 baselined / 28 NEW`. The basel
 was written on 2026-10-05 and never refreshed after four feature PRs, so it
 described an older codebase.
 
-**This is not a rubber stamp.** Every finding below was reviewed individually. One
-was fixed in code. Three were *initially* "fixed" and then deliberately reverted
+**This is not a rubber stamp.** Every finding below was reviewed individually. Two
+were fixed in code. Three were *initially* "fixed" and then deliberately reverted
 after the Foundry suite proved the permissive behaviour was intentional — that
 sequence is recorded below rather than hidden, because it is why those three are now
 accepted.
 
-Refresh command: `node scripts/util/slither-baseline.js --write` (now 52 entries).
+Refresh command: `node scripts/util/slither-baseline.js --write` (now 51 entries).
 
 ---
 
-## Fixed in code (1)
+## Fixed in code (2)
 
 | # | Check | Location | Fix |
 | --- | --- | --- | --- |
 | 1 | `missing-inheritance` (Informational) | `MembershipToken` | Declare `IMembershipTiers` and import it. `totalSupply()` widened `external` -> `public` to satisfy the interface. Behaviour and ABI unchanged. |
+| 2 | `dead-code` (Informational) | `MembershipFeeDistributor._clampedWeight` | Deleted. Unused since `_freezeBasis` superseded it. Before removing a security-named helper the S3 defence was re-verified as structural rather than incidental: `_freezeBasis` captures every extant token's weight at deposit so `Σ basisWeight == intervalWeight`, `_frozenWeight` returns `_basisWeight` directly, and `_accruedAt` divides by the frozen `intervalWeight` — so a per-token weight cannot exceed the denominator regardless of what the membership contract reports. The clamp was a redundant belt at a call site nothing called; the brace is the frozen basis. No behaviour or ABI change. |
 
 ---
 
@@ -58,28 +59,28 @@ to the documented flows — not as a lint fix.
 | `calls-loop` (Low) x6 | `_weightOf` (x3 via `_liveWeight`), `claimERC20`, `claimETH`, `MembershipToken._update` | Reading `getTier`/`ownerOf` per token id is the mechanism: weights must be read live from the membership contract so a tier change cannot be caller-supplied. Bounded by extant supply on owner-only deposits, and by the caller's own `tokenIds` array on claims. |
 | `timestamp` (Low) x5 | `_accruedAt`, `_closeInterval`, `_peek`, `_settleTo`, `MembershipToken.executeTierPrice` | Interval accrual is defined in wall-clock time. The comparisons are the intended semantics (window boundaries, notice periods), not reliance on miner-manipulable values for randomness or ordering. |
 
-### Accepted — real but not worth changing now (9)
+### Accepted — real but not worth changing now (8)
 
 | Check | Location | Why accepted |
 | --- | --- | --- |
 | `missing-zero-check` (Low) x3 | `setKeeper`, `setFeeDistributor`, `ATTROnboardingVault.constructor` | See "Reverted after review" above — zero is an intentional state in all three. |
 | `incorrect-equality` (Medium) | `depositERC20` | `received == 0` is a deliberate zero-deposit guard for fee-on-transfer tokens. Strict equality on a zero check is correct here. |
 | `low-level-calls` (Informational) x4 | `_push`, `claimETH`, `claimPendingETH`, `mintMembership` | ETH forwarding requires `call`; each is wrapped with an explicit success check that reverts `TransferFailed`. |
-| `dead-code` (Informational) | `_clampedWeight` | Genuinely unused — `_freezeBasis` superseded it. **Kept deliberately** pending a decision: its docstring claims to defend against a forged tier read (S3), and that defence now lives in the frozen basis (`sum of frozen weights == intervalWeight`). Deleting it is a one-line change, but removing a security-named helper is worth a reviewer's eye rather than a silent prune. Flagged for QA. |
 
 ---
 
-## Not fixed, deliberately
+## Nothing left deferred
 
-`_clampedWeight` (dead code) is the only item where the "right" action is a judgement
-call rather than mechanical. Everything else is either fixed or a documented
-false-positive / by-design / intentional-state acceptance.
+Every finding is now either fixed in code or accepted with a stated reason. The one
+item previously deferred to a reviewer (`_clampedWeight`) was approved for removal by
+Daniel and pruned, with the S3 defence re-verified as living in the frozen basis
+before deletion rather than assumed.
 
 ## Verification
 
 ```
 node scripts/util/slither-baseline.js
-[slither-baseline] 52 finding(s) in report, 52 in baseline
+[slither-baseline] 51 finding(s) in report, 51 in baseline
 [slither-baseline] no new findings — OK
 ```
 
