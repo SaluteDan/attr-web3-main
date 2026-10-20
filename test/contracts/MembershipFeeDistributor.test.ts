@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import { expect } from "chai";
 import hre from "hardhat";
-import { parseEther, getAddress } from "viem";
+import { parseEther, getAddress, zeroAddress } from "viem";
 
 const { viem, networkHelpers } = await hre.network.create();
 
@@ -88,6 +88,20 @@ describe("MembershipFeeDistributor (tier-weighted)", function () {
   });
 
   // ── Gateway / snapshot semantics ───────────────────────────────────────────
+
+  describe("setKeeper", function () {
+    it("allows the owner to set and clear the keeper", async function () {
+      const [, , keeper] = await viem.getWalletClients();
+      await dist.write.setKeeper([keeper.account.address]);
+      expect(await dist.read.keeper()).to.equal(
+        getAddress(keeper.account.address),
+      );
+
+      // address(0) is an intentional kill switch for keeper-gated pushes.
+      await dist.write.setKeeper([zeroAddress]);
+      expect(await dist.read.keeper()).to.equal(zeroAddress);
+    });
+  });
 
   describe("setTotalMintedSnapshot (gate only)", function () {
     it("updates the gate and emits the event", async function () {

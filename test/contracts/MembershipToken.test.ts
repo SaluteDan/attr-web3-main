@@ -860,6 +860,14 @@ describe("MembershipToken", function () {
       );
     });
 
+    it("allows the fee distributor to be cleared to zero", async function () {
+      // Clearing is intentional: it unbinds the distributor and disables
+      // transfer checkpoints.
+      await membership.write.setFeeDistributor([user2.account.address]);
+      await membership.write.setFeeDistributor([zeroAddress]);
+      expect(await membership.read.feeDistributor()).to.equal(zeroAddress);
+    });
+
     it("Should not allow non-owner to set payment receiver", async function () {
       await viem.assertions.revertWithCustomError(
         membership.write.setPaymentReceiver([user2.account.address], {

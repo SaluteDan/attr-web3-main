@@ -44,6 +44,8 @@ contract ATTROnboardingVault is Ownable {
         Ownable(daoTimelock_)
     {
         if (attrToken_ == address(0) || daoTimelock_ == address(0)) revert ZeroAddress();
+        // `membershipToken_` may be zero here: binding is deferred and done later
+        // through setMembershipToken, which does enforce a non-zero check.
         attrToken = IERC20(attrToken_);
         membershipToken = membershipToken_;
     }

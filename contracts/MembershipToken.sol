@@ -14,6 +14,7 @@ import "./interfaces/IATTROnboardingVault.sol";
 import "./Errors.sol";
 import "./interfaces/IMintMembership.sol";
 import "./interfaces/IMembershipFeeDistributor.sol";
+import "./interfaces/IMembershipTiers.sol";
 
 /**
  * @title MembershipToken
@@ -21,7 +22,7 @@ import "./interfaces/IMembershipFeeDistributor.sol";
  *      Replaces the former GovernanceNFT and MembershipToken contracts.
  *      Token IDs start at 0. Public mint via `mintMembership`; admin mint via `adminMintMembership`.
  */
-contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pausable, ReentrancyGuard, IMintMembership {
+contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pausable, ReentrancyGuard, IMintMembership, IMembershipTiers {
 
     using SafeERC20 for IERC20;
 
@@ -150,6 +151,8 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
      * @param distributor Fee distributor address (0 disables notifications).
      */
     function setFeeDistributor(address distributor) external onlyOwner {
+        // `address(0)` is intentional: it unbinds the distributor and disables
+        // transfer checkpoints.
         address old = feeDistributor;
         feeDistributor = distributor;
         emit FeeDistributorSet(old, distributor);
@@ -371,7 +374,8 @@ contract MembershipToken is ERC721URIStorage, ERC721Votes, ERC2981, Ownable, Pau
     // ── Views ──────────────────────────────────────────────────────────────────
 
     /// @notice Return lifetime minted membership supply.
-    function totalSupply() external view returns (uint256) {
+    /// @dev `public` (not `external`) to satisfy `IMembershipTiers`.
+    function totalSupply() public view returns (uint256) {
         return _nextTokenId;
     }
 
