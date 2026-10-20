@@ -187,9 +187,10 @@ jobs:
       - name: Install Foundry dependencies
         run: forge install foundry-rs/forge-std@v1.16.1 --no-git --shallow
 
-      # Blocking gate: fails if the suite itself breaks. The known-broken
-      # invariant_SumOfBalancesEqualsSupply is excluded via the repo's existing
-      # --no-match-test convention.
+      # Blocking gate: fails if the scoped suite itself breaks. The handler bug
+      # in invariant_SumOfBalancesEqualsSupply was fixed in PR #16 (74005dc).
+      # Its existing exclusion is intentionally retained (Daniel 2026-10-20),
+      # not pending CI restoration. See docs/test/CI_AND_GATES.md.
       #
       # Profile note (Daniel 2026-10-15): the DEEP runs (fuzz 10k / invariant
       # 10k x depth 256) are a LOCAL / pre-PR ritual only — they are too slow for
@@ -216,7 +217,7 @@ jobs:
             echo "## Gas snapshot — report-only (PR → main)"
             echo ""
             echo "Baseline: committed \`.gas-snapshot\` (comparison only)"
-            echo "Command: \`npm run gas:check\` (forge snapshot --check, fuzz seed pinned, known-flaky invariant excluded)"
+            echo "Command: \`npm run gas:check\` (forge snapshot --check, fuzz seed pinned, named invariant intentionally excluded)"
             echo ""
             echo "**This step never fails the build.** Fuzz gas (μ mean / ~ median) is"
             echo "not deterministic across environments (local vs CI differ), so it"
@@ -241,11 +242,10 @@ jobs:
   # above (`npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply`),
   # which runs on PRs into `main` — so suite health IS checked in CI, not only
   # locally. Only the gas step is report-only; the suite step is a real gate.
-  # The smoke test remains scoped: the pre-existing invalid invariant
-  # `invariant_SumOfBalancesEqualsSupply` in test/fuzz/ATTRToken.fuzz.t.sol is
-  # still EXCLUDED. It sums a fixed set of holders while the fuzzer moves ATTR
-  # directly, so any transfer to an untracked address breaks it; it fails
-  # deterministically and would make the gate permanently red. Fix the invariant
-  # (or scope invariant fuzzing to a handler) before removing the exclusion.
-  # Reproduce the full fuzz run locally with `npm run test:fuzz` (add the
-  # --no-match-test exclusion for the same scope CI uses).
+  # The smoke test remains scoped: invariant_SumOfBalancesEqualsSupply is
+  # intentionally EXCLUDED. PR #16 fixed its harness by targeting only transfer
+  # and burn handlers; transfers stay within the four holders the invariant sums.
+  # Keeping the exclusion is compute policy, not an unresolved handler defect.
+  # Deep runs stay LOCAL ONLY; do not expand CI during issue #4 cleanup.
+  # Reproduce the scoped smoke run locally with FOUNDRY_PROFILE=ci and the same
+  # command above. The default `npm run test:fuzz` is the full deep local run.

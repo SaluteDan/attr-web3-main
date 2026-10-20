@@ -42,18 +42,24 @@ forge coverage
 
 ## Running Fuzz Tests
 
+The default profile is a **local-only deep run** (10,000 fuzz runs and 10,000
+invariant runs at depth 256). PR CI uses the smaller `ci` profile and retains the
+named balance-sum invariant exclusion; see
+[CI & Quality Gates](./CI_AND_GATES.md#invariant-scope-and-compute-policy).
+
+
 ```bash
 # Basic fuzz run (10,000 runs)
 forge test --match-contract ATTRTokenFuzzTest
 
-# Extensive fuzzing (100,000 runs) - CI mode
+# Optional extensive fuzzing (100,000 fuzz runs) - LOCAL ONLY
 forge test --match-contract ATTRTokenFuzzTest --fuzz-runs 100000
 
 # With verbose output
 forge test --match-contract ATTRTokenFuzzTest -vv
 
 # Run specific test
-forge test --match-test testFuzz_MintNeverExceedsCap -vvv
+forge test --match-test testFuzz_TransferMaintainsSupply -vvv
 ```
 
 ## Running Invariant Tests
@@ -63,7 +69,7 @@ forge test --match-test testFuzz_MintNeverExceedsCap -vvv
 forge test --match-contract ATTRTokenFuzzTest --match-test invariant_
 
 # With deep state exploration
-forge test --match-test invariant_ --depth 64 --runs 512
+FOUNDRY_INVARIANT_DEPTH=64 FOUNDRY_INVARIANT_RUNS=512 forge test --match-test invariant_
 ```
 
 ## Useful Commands

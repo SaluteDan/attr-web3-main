@@ -401,11 +401,14 @@ baseline, gas snapshots, and the coverage limitation. In short:
   lower — `>=18.20.0` — since the runtime surface needs no Hardhat.)
 - A dedicated **Slither** job gates against a committed baseline (new findings
   only).
-- **No Foundry fuzz job runs in CI**: `forge test` is explicitly **excluded**
-  because the named invariant `invariant_SumOfBalancesEqualsSupply` is
-  unreliable (see [CI & Quality Gates](./CI_AND_GATES.md) and the workflow
-  NOTE). Fuzz results are **not** a CI gate; run `npm run test:fuzz` locally
-  only.
+- **Foundry smoke tests gate PRs into `main`** in the `gas-snapshot` job:
+  `FOUNDRY_PROFILE=ci` uses 256 fuzz runs and 256 invariant runs at depth 32.
+  `invariant_SumOfBalancesEqualsSupply` stays intentionally excluded, although
+  its handler defect was fixed in PR #16. Gas comparison is report-only.
+- **Deep fuzzing remains local only**: `npm run test:fuzz` uses the default
+  10,000-run profile (invariant depth 256). Do not add those runs to GitHub CI.
+  See [CI & Quality Gates](./CI_AND_GATES.md#invariant-scope-and-compute-policy)
+  for the retained exclusion and Daniel's compute policy.
 - Coverage is informational; the Codecov upload only runs when a report exists.
 
 Local equivalent: `npm run gate`.
