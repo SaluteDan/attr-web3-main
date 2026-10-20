@@ -68,7 +68,7 @@ forge test --match-test testFuzz_TransferMaintainsSupply -vvv
 # Run all invariants
 forge test --match-contract ATTRTokenFuzzTest --match-test invariant_
 
-# With deep state exploration
+# Reduced invariant run (512 runs, depth 64)
 FOUNDRY_INVARIANT_DEPTH=64 FOUNDRY_INVARIANT_RUNS=512 forge test --match-test invariant_
 ```
 
