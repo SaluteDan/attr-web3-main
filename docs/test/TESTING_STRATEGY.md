@@ -411,7 +411,8 @@ baseline, gas snapshots, and the coverage limitation. In short:
   for the retained exclusion and Daniel's compute policy.
 - Coverage is informational; the Codecov upload only runs when a report exists.
 
-Local equivalent: `npm run gate`.
+Local Hardhat checks: `npm run gate`. For the scoped Foundry smoke equivalent,
+see [CI & Quality Gates](./CI_AND_GATES.md#local-equivalent).
 
 ### Pre-Commit Hooks
 
