@@ -17,10 +17,14 @@ two committed baselines (Slither and gas).
 | `test` | `compile`, `build`, `check:package`, `test:contracts`, `lint:sol` | **Yes** (each step) |
 | `test` (coverage) | `coverage` + Codecov upload | No — informational only (see below) |
 | `slither` | Slither against `slither.config.json`, then the baseline gate | **Yes** (new findings only) |
+| `gas-snapshot` (PRs into `main` only) | Foundry `ci` smoke suite; excludes `invariant_SumOfBalancesEqualsSupply` | **Yes** (suite health) |
+| `gas-snapshot` (gas comparison) | `gas:check`, reported in job summary and log | No — report-only |
 
-Foundry fuzz/invariant tests are **not** a CI job yet — `forge test` is
-currently non-deterministic (see *Known pre-existing issues*). Run it locally
-with `npm run test:fuzz`.
+Foundry already runs in the `gas-snapshot` job on PRs into `main`, using
+`FOUNDRY_PROFILE=ci`: 256 fuzz runs and 256 invariant runs at depth 32.
+The named balance-sum invariant remains excluded by deliberate policy (see
+*Invariant scope and compute policy* below). Deep 10,000-run testing stays local;
+it must not be added to GitHub CI.
 
 CI (and repo development) is pinned to **Node 22** via `devEngines.runtime`
 (`>=22.13.0`), `.nvmrc`, and the workflow `node-version` — Hardhat v3 refuses to
@@ -46,7 +50,10 @@ intentional rather than silencing a real incompatibility.
 
 ```bash
 npm run gate        # compile + test:contracts + lint:sol
-npm run test:fuzz   # Foundry fuzz (requires forge)
+FOUNDRY_PROFILE=ci npm run test:fuzz -- --no-match-test invariant_SumOfBalancesEqualsSupply
+# Same scoped Foundry smoke suite as PR CI (requires forge)
+
+npm run test:fuzz   # LOCAL ONLY: full deep suite, 10,000 runs / invariant depth 256
 ```
 
 Run `npm run gate` before opening a PR. A red gate at review is an author
@@ -136,9 +143,9 @@ npm run gas:check      # exit non-zero if gas moved vs the committed baseline
 npm run gas:diff       # print the deltas
 ```
 
-The scripts pass `--no-match-test invariant_SumOfBalancesEqualsSupply` so the
-baseline can be produced despite a pre-existing invalid invariant (see below).
-Remove the exclusion once that test is fixed.
+The scripts retain `--no-match-test invariant_SumOfBalancesEqualsSupply`,
+matching the intentionally scoped CI suite. This is not evidence of a remaining
+handler defect; see *Invariant scope and compute policy* below.
 
 - **When** gas-sensitive paths change (payment routing, loop-bound logic,
   `ATTRDeployer` creation), run `gas:snapshot`, review the diff, and commit the
@@ -166,18 +173,41 @@ EIP-7825 handling.
 
 ---
 
-## Known pre-existing issues
+## Invariant scope and compute policy
 
-These predate this CI work and block making Foundry a required gate; they are
-recorded here so they are fixed deliberately rather than silently.
+**Decision (Daniel, 2026-10-20; issue #4):** keep the existing CI and gas-script
+exclusion of `invariant_SumOfBalancesEqualsSupply`. Keep deep fuzz/invariant
+runs local. Restoring this invariant to CI is not an outstanding acceptance
+criterion and no larger CI budget is authorized by this documentation change.
 
-1. **Invalid / flaky invariant** — `test/fuzz/ATTRToken.fuzz.t.sol`
-   `invariant_SumOfBalancesEqualsSupply()` sums a fixed set of five holders
-   while the invariant fuzzer drives `ATTRToken` directly, so any transfer to an
-   address outside that set makes the sum diverge from `totalSupply`. `forge
-   test` fails non-deterministically because of it. Fix the invariant (or scope
-   invariant fuzzing to a handler) before adding a `fuzz` CI job.
-2. **Stale `docs/test/TESTING_STRATEGY.md`** references Ethers.js/Mocha and a
-   removed `hardhat-toolbox`; the live stack is viem + Hardhat v3
-   (`@nomicfoundation/hardhat-node-test-runner`). Out of scope here; tracked for
-   a docs pass.
+The old accounting-harness defect was resolved in
+[PR #16](https://github.com/SaluteDan/attr-web3-main/pull/16), merge
+`74005dcfb120e6371200e822819e7fd6c84fb0b4`:
+
+- `test/fuzz/ATTRToken.fuzz.t.sol` targets the test contract, selecting only
+  `handler_transfer` and `handler_burn`, rather than driving `ATTRToken` directly.
+- Transfers choose both endpoints from `[treasury, alice, bob, owner]`, the same
+  four holders summed by the invariant. The entire initial supply is in treasury.
+- Burns are bounded by the selected address's balance and reduce supply along
+  with balances; they cannot move tokens to an untracked holder.
+
+The prior claim that this invariant still fails because unrestricted token
+transfers escape a five-holder sum is obsolete. This is a structural explanation
+of the merged fix, not a claim of new fuzz-run results.
+
+| Scope | Fuzz runs | Invariant runs / depth | Location |
+| --- | --- | --- | --- |
+| `ci` profile, named invariant excluded | 256 | 256 / 32 | GitHub PR smoke suite |
+| `default` profile, full suite | 10,000 | 10,000 / 256 | Local only |
+
+The local deep run can be lengthy (Daniel reported about nine hours for the
+last 10k run). Do not restore the excluded invariant or raise CI run counts as
+routine issue cleanup. Any future CI expansion needs a separate measured-runtime
+proposal and approval.
+
+### Separate documentation debt
+
+`docs/test/TESTING_STRATEGY.md` still contains historical Ethers.js/Chai examples
+and removed token-role APIs; the live stack is viem + Hardhat v3
+(`@nomicfoundation/hardhat-node-test-runner`). Its CI summary is corrected here,
+but a full examples rewrite is separate work, not an unresolved invariant bug.
