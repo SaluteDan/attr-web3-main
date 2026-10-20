@@ -659,17 +659,6 @@ contract MembershipFeeDistributor is Ownable, ReentrancyGuard, IMembershipFeeDis
         return 0;
     }
 
-    /// @dev Weight of a token clamped to the open interval's frozen denominator.
-    ///      Honest tokens always satisfy `w <= intervalWeight` (a single weight
-    ///      can never exceed total supply weight). Clamping defends against a
-    ///      membership contract that reports an inflated tier on read (S3): the
-    ///      forged weight cannot out-credit the interval pool.
-    function _clampedWeight(address t, uint256 tokenId) internal view returns (uint256 w) {
-        w = _weightOf(tokenId);
-        uint256 iw = _energy[t].intervalWeight;
-        if (w > iw) w = iw;
-    }
-
     /// @dev Close the open interval: fold its rate into the finalised cumulative
     ///      and RETURN the pool share that did not vest within `elapsed` (an
     ///      interrupted interval closed before `WINDOW`). That unvested remainder

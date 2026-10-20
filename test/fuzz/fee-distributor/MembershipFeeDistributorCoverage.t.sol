@@ -537,7 +537,7 @@ contract MembershipFeeDistributorCoverageTest is Test {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Internal branches: _frozenWeight else-arm, _clampedWeight, _cumAt arms
+    // Internal branches: _frozenWeight else-arm, _cumAt arms
     // ══════════════════════════════════════════════════════════════════════════
 
     /// @notice A token minted mid-interval hits the `_frozenWeight` else-arm
